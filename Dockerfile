@@ -14,6 +14,10 @@
 
 FROM node:26-alpine AS deps
 WORKDIR /app
+# better-sqlite3 is a native module built via node-gyp at install time — needs
+# a C++ toolchain + Python, which the base alpine image doesn't ship with.
+# These are only needed in this (discarded) build stage, not the final image.
+RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 RUN npm ci
 
