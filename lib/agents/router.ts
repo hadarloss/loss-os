@@ -14,6 +14,7 @@ export interface RoutingDecision {
   agentId: string;
   reason: string;
   deliverableType: string;
+  brief?: string;
 }
 
 /** Business profile + memory log, appended to every agent's persona so it answers with real context. */
@@ -30,9 +31,13 @@ export function buildContextBlock(businessProfile: string, memoryLog: string): s
 export function buildAgentSystemPrompt(
   agent: AgentDef,
   businessProfile: string,
-  memoryLog: string
+  memoryLog: string,
+  routingBrief?: string
 ): string {
-  return agent.systemPrompt + buildContextBlock(businessProfile, memoryLog);
+  const briefBlock = routingBrief?.trim()
+    ? `\n\n## דגשים מחייבים מהניתוב (מהמנהל/ת שהפנה/תה אליך)\n${routingBrief.trim()}`
+    : "";
+  return agent.systemPrompt + buildContextBlock(businessProfile, memoryLog) + briefBlock;
 }
 
 function buildRosterText(specialists: AgentDef[]): string {
@@ -48,6 +53,7 @@ interface RouteToolInput {
   agent_id: string;
   reason: string;
   deliverable_type?: string;
+  brief?: string;
 }
 
 function buildRouteToolSchema(specialistIds: string[]) {
@@ -67,6 +73,12 @@ function buildRouteToolSchema(specialistIds: string[]) {
         type: "string",
         description: "סוג התוצר הצפוי מהניתוב הזה, לדוגמה: social_post, funnel_plan",
       },
+      brief: {
+        type: "string",
+        description:
+          "דגשים או אילוצים מחייבים מתוך הידע שלך כמנהל/ת (למשל כללי מותג, מגבלות שכבר נקבעו) שהמומחה/ית שנבחר/ה " +
+          "חייב/ת לדעת כדי לא להפר אותם — המומחה/ית לא רואה את הפרומפט שלך, רק את מה שתכתוב/י כאן. השאר/י ריק אם אין דגש מיוחד.",
+      },
     },
     required: ["agent_id", "reason"],
   };
@@ -80,6 +92,7 @@ function toRoutingDecision(input: RouteToolInput, specialistIds: string[]): Rout
     agentId: input.agent_id,
     reason: input.reason,
     deliverableType: input.deliverable_type ?? "general",
+    brief: input.brief,
   };
 }
 
@@ -336,10 +349,11 @@ async function streamAgentReplyAnthropic(
   history: ConversationMessage[],
   businessProfile: string,
   memoryLog: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  routingBrief?: string
 ): Promise<void> {
   const client = getAnthropicClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
 
   const stream = client.messages.stream({
     model: agent.model || DEFAULT_MODEL,
@@ -364,10 +378,11 @@ async function streamAgentReplyOpenAI(
   history: ConversationMessage[],
   businessProfile: string,
   memoryLog: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  routingBrief?: string
 ): Promise<void> {
   const client = getOpenAIClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
 
   try {
     const stream = await client.responses.create({
@@ -402,10 +417,11 @@ async function streamAgentReplyOmniRoute(
   history: ConversationMessage[],
   businessProfile: string,
   memoryLog: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  routingBrief?: string
 ): Promise<void> {
   const client = getOmniRouteClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
 
   try {
     const stream = await client.chat.completions.create({
@@ -436,13 +452,14 @@ export async function streamAgentReply(
   history: ConversationMessage[],
   businessProfile: string,
   memoryLog: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  routingBrief?: string
 ): Promise<void> {
   if (agent.provider === "openai") {
-    return streamAgentReplyOpenAI(agent, history, businessProfile, memoryLog, callbacks);
+    return streamAgentReplyOpenAI(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
   }
   if (agent.provider === "omniroute") {
-    return streamAgentReplyOmniRoute(agent, history, businessProfile, memoryLog, callbacks);
+    return streamAgentReplyOmniRoute(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
   }
-  return streamAgentReplyAnthropic(agent, history, businessProfile, memoryLog, callbacks);
+  return streamAgentReplyAnthropic(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
 }

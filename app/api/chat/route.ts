@@ -122,10 +122,12 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       try {
         let agent = directAgent;
+        let routingBrief: string | undefined;
 
         if (!agent && leadAgent) {
           const decision = await routeToAgent(leadAgent, specialists, fullHistory, businessProfile, memoryLog);
           agent = specialists.find((s) => s.id === decision.agentId) ?? null;
+          routingBrief = decision.brief;
           controller.enqueue(
             sseLine({ type: "routing", from: leadAgent.id, to: decision.agentId, reason: decision.reason })
           );
@@ -147,7 +149,7 @@ export async function POST(req: NextRequest) {
             controller.enqueue(sseLine({ type: "error", message: error.message }));
             controller.close();
           },
-        });
+        }, routingBrief);
       } catch (error) {
         controller.enqueue(
           sseLine({ type: "error", message: error instanceof Error ? error.message : String(error) })

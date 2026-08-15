@@ -34,12 +34,14 @@ async function handleLogout() {
   window.location.href = "/login";
 }
 
+const NON_BRAND_SEGMENTS = new Set(["admin", "account"]);
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   // First path segment doubles as brandId on every dashboard route except the
-  // brand-picker root ("/") and the non-brand-scoped admin pages ("/admin/...").
+  // brand-picker root ("/") and the non-brand-scoped pages ("/admin/...", "/account").
   const [firstSegment] = pathname.split("/").filter(Boolean);
-  const brandId = firstSegment && firstSegment !== "admin" ? firstSegment : null;
+  const brandId = firstSegment && !NON_BRAND_SEGMENTS.has(firstSegment) ? firstSegment : null;
 
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
@@ -51,6 +53,61 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .then((d) => setBrands(d.brands ?? []))
       .catch(() => {});
   }, [brandId]);
+
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((d) => setIsSuperAdmin(!!d.isSuperAdmin))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    // Also refetch on navigation so the badge clears right after an approve/reject.
+    fetch("/api/admin/users")
+      .then((r) => r.json())
+      .then((d) => setPendingCount(d.pending?.length ?? 0))
+      .catch(() => {});
+  }, [isSuperAdmin, pathname]);
+
+  const accountLinks = (
+    <>
+      <Link
+        href="/account"
+        className={cn(
+          "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
+          isActive(pathname, "/account")
+            ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+        )}
+      >
+        <span aria-hidden>👤</span>
+        <span>אזור אישי</span>
+      </Link>
+      {isSuperAdmin && (
+        <Link
+          href="/admin/users"
+          className={cn(
+            "flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
+            isActive(pathname, "/admin/users")
+              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+              : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+          )}
+        >
+          <span className="flex items-center gap-2">
+            <span aria-hidden>🛡️</span>
+            <span>בקשות התחברות</span>
+          </span>
+          {pendingCount > 0 && (
+            <span className="rounded-full bg-destructive text-destructive-foreground text-[10px] px-1.5 py-0.5 leading-none">
+              {pendingCount}
+            </span>
+          )}
+        </Link>
+      )}
+    </>
+  );
 
   return (
     <div className="flex min-h-full w-full">
@@ -83,27 +140,48 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
         </nav>
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="mt-auto flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-        >
-          <span aria-hidden>🚪</span>
-          <span>יציאה</span>
-        </button>
+        <div className="mt-auto flex flex-col gap-0.5 pt-1 border-t border-border">
+          {accountLinks}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+          >
+            <span aria-hidden>🚪</span>
+            <span>יציאה</span>
+          </button>
+        </div>
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
         <header className="md:hidden border-b border-border p-3 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="text-sm font-semibold">צוות ה-AI שלי</div>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              🚪 יציאה
-            </button>
+            <div className="flex items-center gap-3">
+              <Link href="/account" className="text-xs text-muted-foreground hover:text-foreground">
+                👤 אזור אישי
+              </Link>
+              {isSuperAdmin && (
+                <Link
+                  href="/admin/users"
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                >
+                  🛡️ בקשות
+                  {pendingCount > 0 && (
+                    <span className="rounded-full bg-destructive text-destructive-foreground text-[10px] px-1.5 leading-none">
+                      {pendingCount}
+                    </span>
+                  )}
+                </Link>
+              )}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                🚪 יציאה
+              </button>
+            </div>
           </div>
           {brandId && (
             <nav className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1">

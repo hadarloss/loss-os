@@ -54,6 +54,10 @@ export function setUserStatus(id: string, status: UserStatus): void {
   db.prepare(`UPDATE users SET status = ? WHERE id = ?`).run(status, id);
 }
 
+export function updateUserPassword(id: string, passwordHash: string): void {
+  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(passwordHash, id);
+}
+
 export function listPendingUsers(): UserRow[] {
   return db
     .prepare(`SELECT * FROM users WHERE status = 'pending' ORDER BY created_at ASC`)
