@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Team, MessageContentBlock } from "@/lib/agents/types";
 import type { PendingAttachment } from "@/components/chat/fileAttachments";
 
@@ -9,6 +9,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string | MessageContentBlock[];
   agentId?: string;
+  /** The concrete model that actually answered this message (may differ from the agent's configured combo). */
+  resolvedModel?: string;
   /** Display-only file chips — not part of `content` for text attachments (those are inlined into the text). */
   attachmentLabels?: string[];
 }
@@ -32,6 +34,29 @@ function hasContent(content: string | MessageContentBlock[]): boolean {
   return content.length > 0;
 }
 
+interface PersistedChatState {
+  messages: ChatMessage[];
+  routing: RoutingInfo | null;
+  activeAgentId?: string;
+}
+
+/** sessionStorage key for a given chat "thread" — stable across page navigations within the
+ *  same tab, so switching between pages and back doesn't lose the conversation. Cleared when
+ *  the tab closes (sessionStorage), never synced across devices/tabs on purpose. */
+function storageKey(brandId: string, agentId?: string, team?: Team): string {
+  return `hastok:chat:${brandId}:${agentId ?? team ?? "unknown"}`;
+}
+
+function loadPersisted(key: string): PersistedChatState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as PersistedChatState) : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildOutgoingContent(
   text: string,
   attachments: PendingAttachment[]
@@ -50,14 +75,38 @@ function buildOutgoingContent(
 }
 
 export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [activeAgentId, setActiveAgentId] = useState<string | undefined>(agentId);
-  const [routing, setRouting] = useState<RoutingInfo | null>(null);
+  // Computed once per hook instance (agentId/team/brandId don't change without remounting the
+  // page that owns this hook), so it's safe to read as a plain value rather than memoizing.
+  const [key] = useState(() => storageKey(brandId, agentId, team));
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadPersisted(key)?.messages ?? []);
+  const [activeAgentId, setActiveAgentId] = useState<string | undefined>(
+    () => loadPersisted(key)?.activeAgentId ?? agentId
+  );
+  const [routing, setRouting] = useState<RoutingInfo | null>(() => loadPersisted(key)?.routing ?? null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // User-picked model override for this browser session only — never persisted, and
   // reset whenever this hook instance is recreated (e.g. switching agent/team/brand).
   const [modelOverride, setModelOverride] = useState<string | null>(null);
+
+  // Persist the conversation to sessionStorage on every change so navigating to another page
+  // and back (or a same-tab reload) restores it instead of resetting to empty.
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (messages.length === 0) {
+      window.sessionStorage.removeItem(keyRef.current);
+      return;
+    }
+    const state: PersistedChatState = { messages, routing, activeAgentId };
+    try {
+      window.sessionStorage.setItem(keyRef.current, JSON.stringify(state));
+    } catch {
+      // sessionStorage full/unavailable — conversation just won't survive navigation this time.
+    }
+  }, [messages, routing, activeAgentId]);
 
   const dropTrailingEmptyAssistant = useCallback(() => {
     setMessages((prev) => {
@@ -148,6 +197,14 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
                 };
                 return copy;
               });
+            } else if (event.type === "done") {
+              if (event.resolvedModel) {
+                setMessages((prev) => {
+                  const copy = [...prev];
+                  copy[copy.length - 1] = { ...copy[copy.length - 1], resolvedModel: event.resolvedModel };
+                  return copy;
+                });
+              }
             } else if (event.type === "error") {
               setError(event.message);
               dropTrailingEmptyAssistant();

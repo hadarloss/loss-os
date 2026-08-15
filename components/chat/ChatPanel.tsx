@@ -100,25 +100,6 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      {modelSelector && (
-        <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-1.5 text-xs">
-          <span className="text-muted-foreground">מודל בשיחה זו</span>
-          <select
-            value={modelSelector.current}
-            onChange={(e) => modelSelector.onChange(e.target.value)}
-            disabled={isStreaming}
-            className="rounded-md border border-input bg-transparent px-2 py-1 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            title="בחירת מודל לשיחה הנוכחית בלבד — לא נשמר לפעם הבאה"
-          >
-            {modelSelector.options.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
       {routing && (
         <div className="p-3 pb-0">
           <RoutingBreadcrumb routing={routing} agentsById={agentsById} />
@@ -146,6 +127,24 @@ export function ChatPanel({
       </div>
 
       <div className="border-t border-border p-3 pb-5 flex flex-col gap-2">
+        {modelSelector && (
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">מודל בשיחה זו</span>
+            <select
+              value={modelSelector.current}
+              onChange={(e) => modelSelector.onChange(e.target.value)}
+              disabled={isStreaming}
+              className="rounded-md border border-input bg-transparent px-2 py-1 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              title="בחירת מודל לשיחה הנוכחית בלבד — לא נשמר לפעם הבאה"
+            >
+              {modelSelector.options.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {(attachments.length > 0 || attachError || voiceError) && (
           <div className="flex flex-wrap gap-1.5">
             {attachments.map((att) => (
@@ -300,14 +299,6 @@ function MessageBubble({
         <div className="text-xs text-muted-foreground flex items-center gap-1 px-1">
           <span aria-hidden>{agent.icon}</span>
           <span>{agent.name}</span>
-          {agent.model && (
-            <span
-              className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/80"
-              title={agent.provider}
-            >
-              {agent.model}
-            </span>
-          )}
         </div>
       )}
       {message.attachmentLabels && message.attachmentLabels.length > 0 && (
@@ -342,6 +333,11 @@ function MessageBubble({
           text || (isLast && isStreaming ? "…" : "")
         )}
       </div>
+      {!isUser && message.resolvedModel && (
+        <span className="text-[10px] text-muted-foreground/70 px-1" title="המנוע שהשיב בפועל">
+          {message.resolvedModel}
+        </span>
+      )}
       {(showSave || showSaveMemory) && (
         <div className="flex gap-3">
           {showSave && (

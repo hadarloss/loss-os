@@ -70,6 +70,9 @@ export interface TokenEvent {
 export interface DoneEvent {
   type: "done";
   handoff: HandoffRecord | null;
+  /** The concrete model that actually answered — for OmniRoute this is whatever real model its
+   *  fallback chain picked, which can differ from the combo name the user selected. */
+  resolvedModel?: string;
 }
 
 export interface ErrorEvent {

@@ -27,6 +27,18 @@ export function OnboardingClient({ brandId, agent }: { brandId: string; agent: A
   const lastAssistantText = lastAssistant ? extractText(lastAssistant.content) : "";
   const showProfileSave = !isStreaming && lastAssistant && lastAssistantText.includes(PROFILE_MARKER);
 
+  // A full business-profile draft is long and already has a dedicated page + the save banner
+  // above — no need to keep the whole thing sitting in the chat scrollback once it's done
+  // streaming. Collapse it to a short pointer instead (the currently-streaming message is left
+  // alone so the user still sees it being generated).
+  const displayMessages = messages.map((m, i) => {
+    const isLastMessage = i === messages.length - 1;
+    if (m.role !== "assistant" || (isLastMessage && isStreaming)) return m;
+    const text = extractText(m.content);
+    if (!text.includes(PROFILE_MARKER)) return m;
+    return { ...m, content: "🗂️ טיוטת תיק עסק — לצפייה ושמירה ראו למעלה, או בעמוד \"פרופיל עסקי\"." };
+  });
+
   const handleSaveProfile = async () => {
     if (!lastAssistant) return;
     setSaveState("saving");
@@ -58,7 +70,7 @@ export function OnboardingClient({ brandId, agent }: { brandId: string; agent: A
         </div>
       )}
       <ChatPanel
-        messages={messages}
+        messages={displayMessages}
         onSend={sendMessage}
         isStreaming={isStreaming}
         error={error}

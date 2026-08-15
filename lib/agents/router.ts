@@ -46,6 +46,22 @@ function buildRosterText(specialists: AgentDef[]): string {
     .join("\n");
 }
 
+/**
+ * System prompt for a ROUTING call only — deliberately excludes buildContextBlock (full business
+ * profile + full memory log). Routing just needs the roster to pick an agent_id; the specialist's
+ * own reply (buildAgentSystemPrompt) is where that context actually matters. Skipping it here keeps
+ * the routing payload small regardless of how large a lead's own persona or the memory log grows —
+ * a lead with a long persona (e.g. an appended brand guide) plus the full context block was blowing
+ * past weaker OmniRoute fallback models' request-size limits and breaking routing entirely.
+ */
+function buildRoutingSystemPrompt(lead: AgentDef, specialists: AgentDef[]): string {
+  return (
+    lead.systemPrompt +
+    "\n\n---\n\n## רשימת הסוכנים בצוות שלך (לצורך ניתוב בלבד — אלה המזהים היחידים התקפים)\n" +
+    buildRosterText(specialists)
+  );
+}
+
 const ROUTE_TOOL_NAME = "route_to_agent";
 const ROUTE_TOOL_DESCRIPTION = "בחר/י את הסוכן המומחה המתאים ביותר לטיפול בבקשה הנוכחית.";
 
@@ -85,6 +101,11 @@ function buildRouteToolSchema(specialistIds: string[]) {
 }
 
 function toRoutingDecision(input: RouteToolInput, specialistIds: string[]): RoutingDecision {
+  if (!input?.agent_id) {
+    // Seen from weaker/free-tier OmniRoute fallback models garbling forced tool-use under load —
+    // a clear, retryable message instead of "לא קיים: undefined".
+    throw new Error("המנהל לא הצליח לבחור סוכן מתאים לבקשה. נסו לשלוח את ההודעה שוב.");
+  }
   if (!specialistIds.includes(input.agent_id)) {
     throw new Error(`המנהל ניתב לסוכן לא קיים: ${input.agent_id}`);
   }
@@ -109,11 +130,7 @@ async function routeToAgentAnthropic(
 ): Promise<RoutingDecision> {
   const client = getAnthropicClient();
 
-  const systemPrompt =
-    lead.systemPrompt +
-    "\n\n---\n\n## רשימת הסוכנים בצוות שלך (לצורך ניתוב בלבד — אלה המזהים היחידים התקפים)\n" +
-    buildRosterText(specialists) +
-    buildContextBlock(businessProfile, memoryLog);
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
 
   const specialistIds = specialists.map((s) => s.id);
 
@@ -150,11 +167,7 @@ async function routeToAgentOpenAI(
 ): Promise<RoutingDecision> {
   const client = getOpenAIClient();
 
-  const systemPrompt =
-    lead.systemPrompt +
-    "\n\n---\n\n## רשימת הסוכנים בצוות שלך (לצורך ניתוב בלבד — אלה המזהים היחידים התקפים)\n" +
-    buildRosterText(specialists) +
-    buildContextBlock(businessProfile, memoryLog);
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
 
   const specialistIds = specialists.map((s) => s.id);
 
@@ -251,11 +264,7 @@ async function routeToAgentOmniRoute(
 ): Promise<RoutingDecision> {
   const client = getOmniRouteClient();
 
-  const systemPrompt =
-    lead.systemPrompt +
-    "\n\n---\n\n## רשימת הסוכנים בצוות שלך (לצורך ניתוב בלבד — אלה המזהים היחידים התקפים)\n" +
-    buildRosterText(specialists) +
-    buildContextBlock(businessProfile, memoryLog);
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
 
   const specialistIds = specialists.map((s) => s.id);
 
@@ -312,7 +321,7 @@ export async function routeToAgent(
 
 export interface StreamCallbacks {
   onText: (delta: string) => void;
-  onDone: (fullText: string) => void;
+  onDone: (fullText: string, resolvedModel?: string) => void;
   onError: (error: Error) => void;
 }
 
@@ -366,7 +375,7 @@ async function streamAgentReplyAnthropic(
 
   try {
     const finalText = await stream.finalText();
-    callbacks.onDone(finalText);
+    callbacks.onDone(finalText, agent.model || DEFAULT_MODEL);
   } catch (error) {
     callbacks.onError(error instanceof Error ? error : new Error(String(error)));
   }
@@ -405,7 +414,7 @@ async function streamAgentReplyOpenAI(
       }
     }
 
-    callbacks.onDone(fullText);
+    callbacks.onDone(fullText, agent.model || DEFAULT_OPENAI_MODEL);
   } catch (error) {
     callbacks.onError(error instanceof Error ? error : new Error(String(error)));
   }
@@ -432,7 +441,12 @@ async function streamAgentReplyOmniRoute(
     });
 
     let fullText = "";
+    // OmniRoute's combo can fall back across several real models — each chunk echoes back
+    // whichever one actually answered, which is usually more specific than the combo name
+    // requested (e.g. "openrouter/openai/gpt-oss-20b" instead of "archetype-d-...").
+    let resolvedModel: string | undefined;
     for await (const chunk of stream) {
+      if (!resolvedModel && chunk.model) resolvedModel = chunk.model;
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) {
         fullText += delta;
@@ -440,7 +454,7 @@ async function streamAgentReplyOmniRoute(
       }
     }
 
-    callbacks.onDone(fullText);
+    callbacks.onDone(fullText, resolvedModel ?? (agent.model || DEFAULT_OMNIROUTE_MODEL));
   } catch (error) {
     callbacks.onError(error instanceof Error ? error : new Error(String(error)));
   }

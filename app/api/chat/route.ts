@@ -159,8 +159,8 @@ export async function POST(req: NextRequest) {
 
         await streamAgentReply(agent, fullHistory, businessProfile, memoryLog, {
           onText: (delta) => controller.enqueue(sseLine({ type: "token", text: delta })),
-          onDone: () => {
-            controller.enqueue(sseLine({ type: "done", handoff: null }));
+          onDone: (_fullText, resolvedModel) => {
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel }));
             controller.close();
           },
           onError: (error) => {
