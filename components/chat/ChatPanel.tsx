@@ -12,6 +12,7 @@ import type { Team } from "@/lib/agents/types";
 import { cn } from "@/lib/utils";
 
 export interface SaveContext {
+  brandId: string;
   team: Team;
   deliverableType?: string;
 }
@@ -208,10 +209,14 @@ function MessageBubble({
   isStreaming: boolean;
 }) {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [memoryState, setMemoryState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [savedAsXlsx, setSavedAsXlsx] = useState<{ outputPath: string } | null>(null);
   const isUser = message.role === "user";
   const text = extractText(message.content);
   const showSave =
-    !isUser && saveContext && message.agentId && text && !(isLast && isStreaming);
+    !isUser && saveContext && message.agentId && text && !(isLast && isStreaming) && !savedAsXlsx;
+  const showSaveMemory =
+    !isUser && saveContext && text && !(isLast && isStreaming);
 
   const handleSave = async () => {
     if (!saveContext || !message.agentId) return;
@@ -221,6 +226,7 @@ function MessageBubble({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          brandId: saveContext.brandId,
           team: saveContext.team,
           agentId: message.agentId,
           content: text,
@@ -228,9 +234,34 @@ function MessageBubble({
         }),
       });
       if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (data.handoff?.format === "xlsx" || data.format === "xlsx") {
+        setSavedAsXlsx({ outputPath: data.path ?? data.handoff?.output_path ?? "" });
+      }
       setSaveState("saved");
     } catch {
       setSaveState("error");
+    }
+  };
+
+  const handleSaveMemory = async () => {
+    if (!saveContext) return;
+    setMemoryState("saving");
+    try {
+      const res = await fetch("/api/memory-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brandId: saveContext.brandId,
+          agent: message.agentId ?? "assistant",
+          type: "note",
+          summary: text,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      setMemoryState("saved");
+    } catch {
+      setMemoryState("error");
     }
   };
 
@@ -240,6 +271,14 @@ function MessageBubble({
         <div className="text-xs text-muted-foreground flex items-center gap-1 px-1">
           <span aria-hidden>{agent.icon}</span>
           <span>{agent.name}</span>
+          {agent.model && (
+            <span
+              className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/80"
+              title={agent.provider}
+            >
+              {agent.model}
+            </span>
+          )}
         </div>
       )}
       {message.attachmentLabels && message.attachmentLabels.length > 0 && (
@@ -260,19 +299,47 @@ function MessageBubble({
           isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
         )}
       >
-        {text || (isLast && isStreaming ? "…" : "")}
+        {savedAsXlsx ? (
+          <span>
+            ✅ הגאנט נשמר כקובץ אקסל בתוצרים —{" "}
+            <a
+              href={`/${saveContext!.brandId}/outputs`}
+              className="underline underline-offset-2 hover:text-primary"
+            >
+              מעבר לתוצרים
+            </a>
+          </span>
+        ) : (
+          text || (isLast && isStreaming ? "…" : "")
+        )}
       </div>
-      {showSave && (
-        <button
-          onClick={handleSave}
-          disabled={saveState === "saving" || saveState === "saved"}
-          className="text-xs text-muted-foreground hover:text-foreground px-1 underline underline-offset-2 disabled:no-underline"
-        >
-          {saveState === "idle" && "💾 שמור כפלט"}
-          {saveState === "saving" && "שומר..."}
-          {saveState === "saved" && "✓ נשמר בתוצרים"}
-          {saveState === "error" && "שגיאה בשמירה — נסה/י שוב"}
-        </button>
+      {(showSave || showSaveMemory) && (
+        <div className="flex gap-3">
+          {showSave && (
+            <button
+              onClick={handleSave}
+              disabled={saveState === "saving" || saveState === "saved"}
+              className="text-xs text-muted-foreground hover:text-foreground px-1 underline underline-offset-2 disabled:no-underline"
+            >
+              {saveState === "idle" && "💾 שמור כפלט"}
+              {saveState === "saving" && "שומר..."}
+              {saveState === "saved" && "✓ נשמר בתוצרים"}
+              {saveState === "error" && "שגיאה בשמירה — נסה/י שוב"}
+            </button>
+          )}
+          {showSaveMemory && (
+            <button
+              onClick={handleSaveMemory}
+              disabled={memoryState === "saving" || memoryState === "saved"}
+              className="text-xs text-muted-foreground hover:text-foreground px-1 underline underline-offset-2 disabled:no-underline"
+            >
+              {memoryState === "idle" && "💭 שמור כזיכרון"}
+              {memoryState === "saving" && "שומר..."}
+              {memoryState === "saved" && "✓ נשמר בזיכרון"}
+              {memoryState === "error" && "שגיאה בשמירה — נסה/י שוב"}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

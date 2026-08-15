@@ -10,14 +10,17 @@ import type { AgentLite } from "@/components/chat/RoutingBreadcrumb";
 
 const PROFILE_MARKER = "# תיק העסק";
 
-export function OnboardingClient({ agent }: { agent: AgentLite & { id: string } }) {
+export function OnboardingClient({ brandId, agent }: { brandId: string; agent: AgentLite & { id: string } }) {
   const router = useRouter();
   const { messages, sendMessage, isStreaming, error, routing } = useAgentChat({
+    brandId,
     agentId: agent.id,
   });
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  const agentsById = { [agent.id]: { name: agent.name, icon: agent.icon } };
+  const agentsById = {
+    [agent.id]: { name: agent.name, icon: agent.icon, provider: agent.provider, model: agent.model },
+  };
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   const lastAssistantText = lastAssistant ? extractText(lastAssistant.content) : "";
@@ -27,7 +30,7 @@ export function OnboardingClient({ agent }: { agent: AgentLite & { id: string } 
     if (!lastAssistant) return;
     setSaveState("saving");
     try {
-      const res = await fetch("/api/business-profile", {
+      const res = await fetch(`/api/business-profile?brandId=${encodeURIComponent(brandId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: lastAssistantText }),

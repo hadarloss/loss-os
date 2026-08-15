@@ -1,10 +1,5 @@
-import { promises as fs } from "fs";
-import path from "path";
-import { ensureSeededFromTemplate } from "@/lib/fs/paths";
-
-const CONTEXT_DIR = path.join(process.cwd(), "context");
-const MEMORY_LOG_PATH = path.join(CONTEXT_DIR, "MEMORY_LOG.md");
-const TEMPLATE_PATH = path.join(CONTEXT_DIR, "MEMORY_LOG.template.md");
+import { randomUUID } from "crypto";
+import db from "@/lib/db/schema";
 
 export type MemoryEntryType = "correction" | "new_rule" | "preference" | "note";
 
@@ -15,36 +10,67 @@ export interface MemoryEntry {
   summary: string;
 }
 
-export async function readMemoryLog(): Promise<string> {
-  await ensureSeededFromTemplate(MEMORY_LOG_PATH, TEMPLATE_PATH);
-  return fs.readFile(MEMORY_LOG_PATH, "utf-8");
-}
-
-export async function appendMemoryEntry(entry: {
-  agent: string;
+interface MemoryRow {
+  id: string;
+  brand_id: string;
+  author_user_id: string | null;
   type: MemoryEntryType;
-  summary: string;
-}): Promise<void> {
-  await ensureSeededFromTemplate(MEMORY_LOG_PATH, TEMPLATE_PATH);
-  const now = new Date();
-  const stamp = now.toISOString().slice(0, 16).replace("T", " ");
-  const block = [
-    `## ${stamp} — ${entry.type}`,
-    `**Agent:** ${entry.agent}`,
-    `**Type:** ${entry.type}`,
-    `**Summary:** ${entry.summary}`,
-    "",
-    "---",
-    "",
-  ].join("\n");
-
-  await fs.appendFile(MEMORY_LOG_PATH, block, "utf-8");
+  agent: string;
+  content: string;
+  created_at: string;
 }
 
-const ENTRY_HEADER_RE = /^## (.+?) — (correction|new_rule|preference|note)$/;
+/** DB rows for a brand, newest first — the structured shape the UI/list callers want. */
+export function listMemoryEntries(brandId: string): MemoryEntry[] {
+  const rows = db
+    .prepare(`SELECT * FROM memory_log_entries WHERE brand_id = ? ORDER BY created_at DESC`)
+    .all(brandId) as MemoryRow[];
 
-/** Parses the append-only markdown log into structured entries for the UI viewer. */
+  return rows.map((r) => ({
+    date: r.created_at,
+    type: r.type,
+    agent: r.agent,
+    summary: r.content,
+  }));
+}
+
+/**
+ * Renders the DB rows as the same markdown block format the old flat MEMORY_LOG.md used —
+ * kept so buildContextBlock() in lib/agents/router.ts (which expects a markdown string
+ * appended to an agent's system prompt) needs no signature change.
+ */
+export async function readMemoryLog(brandId: string): Promise<string> {
+  const entries = [...listMemoryEntries(brandId)].reverse(); // oldest first, like the old append-only file
+  if (entries.length === 0) return "";
+
+  return entries
+    .map((entry) =>
+      [
+        `## ${entry.date} — ${entry.type}`,
+        `**Agent:** ${entry.agent}`,
+        `**Type:** ${entry.type}`,
+        `**Summary:** ${entry.summary}`,
+        "",
+        "---",
+        "",
+      ].join("\n")
+    )
+    .join("\n");
+}
+
+export async function appendMemoryEntry(
+  brandId: string,
+  entry: { agent: string; type: MemoryEntryType; summary: string; authorUserId?: string }
+): Promise<void> {
+  db.prepare(
+    `INSERT INTO memory_log_entries (id, brand_id, author_user_id, type, agent, content)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(randomUUID(), brandId, entry.authorUserId ?? null, entry.type, entry.agent, entry.summary);
+}
+
+/** Thin wrapper kept for call sites that still parse a rendered markdown log (legacy shape). */
 export function parseMemoryLog(raw: string): MemoryEntry[] {
+  const ENTRY_HEADER_RE = /^## (.+?) — (correction|new_rule|preference|note)$/;
   const entries: MemoryEntry[] = [];
   const blocks = raw.split(/\n(?=## )/g);
 

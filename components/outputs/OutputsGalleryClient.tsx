@@ -1,12 +1,28 @@
 "use client";
 
 import { useState } from "react";
+import useSWR from "swr";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { OutputSummary } from "@/lib/fs/outputs";
 
-export function OutputsGalleryClient({ outputs }: { outputs: OutputSummary[] }) {
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+export function OutputsGalleryClient({
+  brandId,
+  outputs: initialOutputs,
+}: {
+  brandId: string;
+  outputs: OutputSummary[];
+}) {
+  const { data } = useSWR<{ outputs: OutputSummary[] }>(
+    `/api/outputs?brandId=${encodeURIComponent(brandId)}`,
+    fetcher,
+    { fallbackData: { outputs: initialOutputs }, refreshInterval: 7000 }
+  );
+  const outputs = data?.outputs ?? initialOutputs;
+
   const marketing = outputs.filter((o) => o.team === "marketing");
   const branding = outputs.filter((o) => o.team === "branding");
 
@@ -15,12 +31,17 @@ export function OutputsGalleryClient({ outputs }: { outputs: OutputSummary[] }) 
   const [loading, setLoading] = useState(false);
 
   const openOutput = async (output: OutputSummary) => {
+    if (output.format === "xlsx") {
+      setSelected(output);
+      setContent("");
+      return;
+    }
     setSelected(output);
     setLoading(true);
     setContent("");
     try {
       const res = await fetch(
-        `/api/outputs?team=${output.team}&filename=${encodeURIComponent(output.filename)}`
+        `/api/outputs?brandId=${encodeURIComponent(brandId)}&team=${output.team}&filename=${encodeURIComponent(output.filename)}`
       );
       const data = await res.json();
       setContent(data.content ?? "");
@@ -51,9 +72,21 @@ export function OutputsGalleryClient({ outputs }: { outputs: OutputSummary[] }) 
               {selected?.agentId} · {selected?.deliverableType}
             </DialogDescription>
           </DialogHeader>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">
-            {loading ? "טוען..." : content}
-          </div>
+          {selected?.format === "xlsx" ? (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-sm text-muted-foreground">קובץ אקסל — אין תצוגה מקדימה כאן.</p>
+              <a
+                href={`/api/outputs/${selected.id}/file?brandId=${encodeURIComponent(brandId)}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-input px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                ⬇️ הורדת קובץ אקסל
+              </a>
+            </div>
+          ) : (
+            <div className="whitespace-pre-wrap text-sm leading-relaxed">
+              {loading ? "טוען..." : content}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </Tabs>
@@ -77,7 +110,10 @@ function OutputGrid({
         <button key={item.filename} onClick={() => onOpen(item)} className="text-start">
           <Card className="hover:ring-primary/40 transition-shadow hover:shadow-md h-full">
             <CardHeader>
-              <CardTitle className="text-sm truncate">{item.title}</CardTitle>
+              <CardTitle className="text-sm truncate">
+                {item.format === "xlsx" && <span aria-hidden>📊 </span>}
+                {item.title}
+              </CardTitle>
               <CardDescription>
                 {item.agentId} · {item.deliverableType}
               </CardDescription>

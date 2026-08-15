@@ -9,9 +9,9 @@ const VALID_TEAMS: Team[] = ["marketing", "branding"];
 export default async function TeamAgentPage({
   params,
 }: {
-  params: Promise<{ team: string; agentId: string }>;
+  params: Promise<{ brandId: string; team: string; agentId: string }>;
 }) {
-  const { team, agentId } = await params;
+  const { brandId, team, agentId } = await params;
   if (!VALID_TEAMS.includes(team as Team)) notFound();
 
   const [{ lead, specialists }, agent] = await Promise.all([
@@ -23,9 +23,10 @@ export default async function TeamAgentPage({
 
   return (
     <div className="flex flex-1 min-h-0">
-      <TeamSidebar team={team as Team} lead={lead} specialists={specialists} />
+      <TeamSidebar brandId={brandId} team={team as Team} lead={lead} specialists={specialists} />
       <DirectAgentChatClient
         key={agentId}
+        brandId={brandId}
         agent={agent}
         saveTeam={team as Team}
         extraAgentsForLookup={[lead, ...specialists]}

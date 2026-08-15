@@ -53,3 +53,9 @@ context/BUSINESS_PROFILE.md
 context/MEMORY_LOG.md
 outputs/**/*.md
 outputs/**/*.meta.json
+
+# SQLite data dir — real app.db is runtime state, not tracked (see lib/db/client.ts)
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal
+/data/*.db-shm

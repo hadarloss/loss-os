@@ -6,8 +6,12 @@ import type { Team } from "@/lib/agents/types";
 
 const VALID_TEAMS: Team[] = ["marketing", "branding"];
 
-export default async function TeamPage({ params }: { params: Promise<{ team: string }> }) {
-  const { team } = await params;
+export default async function TeamPage({
+  params,
+}: {
+  params: Promise<{ brandId: string; team: string }>;
+}) {
+  const { brandId, team } = await params;
   if (!VALID_TEAMS.includes(team as Team)) notFound();
 
   const { lead, specialists } = await getTeamTree(team as Team);
@@ -15,8 +19,14 @@ export default async function TeamPage({ params }: { params: Promise<{ team: str
 
   return (
     <div className="flex flex-1 min-h-0">
-      <TeamSidebar team={team as Team} lead={lead} specialists={specialists} />
-      <TeamWorkspaceClient key={team} team={team as Team} lead={lead} specialists={specialists} />
+      <TeamSidebar brandId={brandId} team={team as Team} lead={lead} specialists={specialists} />
+      <TeamWorkspaceClient
+        key={team}
+        brandId={brandId}
+        team={team as Team}
+        lead={lead}
+        specialists={specialists}
+      />
     </div>
   );
 }

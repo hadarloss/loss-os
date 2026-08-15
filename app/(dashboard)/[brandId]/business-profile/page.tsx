@@ -4,8 +4,13 @@ import { readBusinessProfile } from "@/lib/fs/businessProfile";
 // Reads live data from disk — must not be statically cached at build time.
 export const dynamic = "force-dynamic";
 
-export default async function BusinessProfilePage() {
-  const content = await readBusinessProfile();
+export default async function BusinessProfilePage({
+  params,
+}: {
+  params: Promise<{ brandId: string }>;
+}) {
+  const { brandId } = await params;
+  const content = await readBusinessProfile(brandId);
 
   return (
     <div className="p-6 max-w-3xl mx-auto w-full flex flex-col gap-6">
@@ -13,13 +18,13 @@ export default async function BusinessProfilePage() {
         <h1 className="text-2xl font-semibold">🗂️ פרופיל עסקי</h1>
         <p className="text-muted-foreground mt-1">
           המסמך שממנו כל הסוכנים במערכת שואבים הקשר. אפשר לערוך ידנית, או לעדכן דרך שיחה עם{" "}
-          <a href="/onboarding" className="text-primary hover:underline">
+          <a href={`/${brandId}/onboarding`} className="text-primary hover:underline">
             אוריתה
           </a>
           .
         </p>
       </div>
-      <BusinessProfileClient initialContent={content} />
+      <BusinessProfileClient brandId={brandId} initialContent={content} />
     </div>
   );
 }

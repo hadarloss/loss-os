@@ -6,10 +6,12 @@ import { buildAgentsById } from "@/components/chat/utils";
 import type { AgentDef, Team } from "@/lib/agents/types";
 
 export function DirectAgentChatClient({
+  brandId,
   agent,
   saveTeam,
   extraAgentsForLookup = [],
 }: {
+  brandId: string;
   agent: AgentDef;
   /** Pass the agent's team if it's marketing/branding to enable "save as output". */
   saveTeam?: Team;
@@ -17,6 +19,7 @@ export function DirectAgentChatClient({
   extraAgentsForLookup?: AgentDef[];
 }) {
   const { messages, sendMessage, isStreaming, error, routing } = useAgentChat({
+    brandId,
     agentId: agent.id,
   });
   const agentsById = buildAgentsById([agent, ...extraAgentsForLookup]);
@@ -30,7 +33,7 @@ export function DirectAgentChatClient({
       routing={routing}
       agentsById={agentsById}
       placeholder={`כתבו הודעה ל${agent.name}...`}
-      saveContext={saveTeam ? { team: saveTeam } : undefined}
+      saveContext={saveTeam ? { brandId, team: saveTeam } : undefined}
       emptyState={
         <div className="text-sm text-muted-foreground p-3">
           {agent.icon} שלום! אני {agent.name} — {agent.role}. איך אפשר לעזור?

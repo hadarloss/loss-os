@@ -2,7 +2,12 @@ import { notFound } from "next/navigation";
 import { OnboardingClient } from "@/components/chat/OnboardingClient";
 import { getAgentById } from "@/lib/agents/registry";
 
-export default async function OnboardingPage() {
+export default async function OnboardingPage({
+  params,
+}: {
+  params: Promise<{ brandId: string }>;
+}) {
+  const { brandId } = await params;
   const agent = await getAgentById("onboarding");
   if (!agent) notFound();
 
@@ -14,7 +19,7 @@ export default async function OnboardingPage() {
           {agent.name} — {agent.role}
         </h1>
       </div>
-      <OnboardingClient agent={{ id: agent.id, name: agent.name, icon: agent.icon }} />
+      <OnboardingClient brandId={brandId} agent={{ id: agent.id, name: agent.name, icon: agent.icon }} />
     </div>
   );
 }

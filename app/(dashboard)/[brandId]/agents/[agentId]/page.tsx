@@ -6,9 +6,9 @@ import type { Team } from "@/lib/agents/types";
 export default async function GenericAgentPage({
   params,
 }: {
-  params: Promise<{ agentId: string }>;
+  params: Promise<{ brandId: string; agentId: string }>;
 }) {
-  const { agentId } = await params;
+  const { brandId, agentId } = await params;
   const agent = await getAgentById(agentId);
   if (!agent) notFound();
 
@@ -23,7 +23,7 @@ export default async function GenericAgentPage({
           {agent.name} — {agent.role}
         </h1>
       </div>
-      <DirectAgentChatClient key={agentId} agent={agent} saveTeam={saveTeam} />
+      <DirectAgentChatClient key={agentId} brandId={brandId} agent={agent} saveTeam={saveTeam} />
     </div>
   );
 }

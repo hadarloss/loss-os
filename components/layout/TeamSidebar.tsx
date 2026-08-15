@@ -6,16 +6,18 @@ import { cn } from "@/lib/utils";
 import type { AgentDef, Team } from "@/lib/agents/types";
 
 export function TeamSidebar({
+  brandId,
   team,
   lead,
   specialists,
 }: {
+  brandId: string;
   team: Team;
   lead: AgentDef;
   specialists: AgentDef[];
 }) {
   const pathname = usePathname();
-  const teamHref = `/teams/${team}`;
+  const teamHref = `/${brandId}/teams/${team}`;
   const isTeamHome = pathname === teamHref;
 
   return (
@@ -43,7 +45,7 @@ export function TeamSidebar({
       <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">חברי הצוות</div>
       <nav className="flex flex-col gap-0.5 p-3 pt-1">
         {specialists.map((agent) => {
-          const href = `/teams/${team}/agents/${agent.id}`;
+          const href = `/${brandId}/teams/${team}/agents/${agent.id}`;
           const active = pathname === href;
           return (
             <Link

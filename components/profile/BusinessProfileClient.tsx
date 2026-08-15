@@ -1,26 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-export function BusinessProfileClient({ initialContent }: { initialContent: string }) {
-  const [content, setContent] = useState(initialContent);
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+export function BusinessProfileClient({
+  brandId,
+  initialContent,
+}: {
+  brandId: string;
+  initialContent: string;
+}) {
+  const { data, mutate } = useSWR<{ content: string; isTemplate: boolean }>(
+    `/api/business-profile?brandId=${encodeURIComponent(brandId)}`,
+    fetcher,
+    { fallbackData: { content: initialContent, isTemplate: false }, refreshInterval: 7000 }
+  );
+  const content = data?.content ?? initialContent;
   const [draft, setDraft] = useState(initialContent);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Keep the draft synced with live-polled content while not actively editing,
+  // so a change made elsewhere (chat, another tab) shows up without stomping local edits.
+  useEffect(() => {
+    if (!editing) setDraft(content);
+  }, [content, editing]);
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch("/api/business-profile", {
+      const res = await fetch(`/api/business-profile?brandId=${encodeURIComponent(brandId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: draft }),
       });
       if (!res.ok) throw new Error();
-      const data = await res.json();
-      setContent(data.content);
+      const updated = await res.json();
+      await mutate(updated, { revalidate: false });
       setEditing(false);
     } finally {
       setSaving(false);

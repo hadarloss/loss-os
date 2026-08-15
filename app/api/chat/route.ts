@@ -8,6 +8,7 @@ import { getAnthropicClient, MissingApiKeyError } from "@/lib/anthropic/client";
 import { getOpenAIClient, MissingOpenAIApiKeyError } from "@/lib/openai/client";
 import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute/client";
 import { AgentDef, ChatStreamEvent, Provider, Team } from "@/lib/agents/types";
+import { requireBrandMember } from "@/lib/auth/brandAccess";
 
 // Generous but bounded cap on a single attachment's base64 payload (~15MB raw file).
 const MAX_BASE64_LENGTH = 20_000_000;
@@ -36,6 +37,7 @@ const ContentBlockSchema = z.discriminatedUnion("type", [
 const MessageContentSchema = z.union([z.string().min(1), z.array(ContentBlockSchema).min(1)]);
 
 const ChatRequestSchema = z.object({
+  brandId: z.string().min(1),
   agentId: z.string().optional(),
   team: z.enum(["marketing", "branding"]).optional(),
   message: MessageContentSchema,
@@ -54,7 +56,10 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return Response.json({ error: parsed.error.message }, { status: 400 });
   }
-  const { agentId, team, message, history } = parsed.data;
+  const { brandId, agentId, team, message, history } = parsed.data;
+
+  const guard = await requireBrandMember(brandId);
+  if (guard.response) return guard.response;
 
   if (!agentId && !team) {
     return Response.json(
@@ -107,8 +112,8 @@ export async function POST(req: NextRequest) {
   }
 
   const [businessProfile, memoryLog] = await Promise.all([
-    readBusinessProfile(),
-    readMemoryLog(),
+    readBusinessProfile(brandId),
+    readMemoryLog(brandId),
   ]);
 
   const fullHistory: ConversationMessage[] = [...history, { role: "user", content: message }];

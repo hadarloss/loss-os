@@ -3,6 +3,8 @@ import type { RoutingInfo } from "@/components/chat/useAgentChat";
 export interface AgentLite {
   name: string;
   icon: string;
+  provider?: string;
+  model?: string;
 }
 
 export function RoutingBreadcrumb({
@@ -32,6 +34,11 @@ export function RoutingBreadcrumb({
         <span className="inline-flex items-center gap-1 font-medium text-foreground">
           <span aria-hidden>{to.icon}</span>
           {to.name}
+          {to.model && (
+            <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+              {to.model}
+            </span>
+          )}
         </span>
       )}
       <span className="text-muted-foreground/80">— {routing.reason}</span>

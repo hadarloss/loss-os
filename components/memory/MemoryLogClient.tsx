@@ -1,10 +1,10 @@
+"use client";
+
+import useSWR from "swr";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AddMemoryEntryForm } from "@/components/memory/AddMemoryEntryForm";
-import { readMemoryLog, parseMemoryLog, MemoryEntryType } from "@/lib/fs/memoryLog";
-
-// Reads live data from disk — must not be statically cached at build time.
-export const dynamic = "force-dynamic";
+import type { MemoryEntry, MemoryEntryType } from "@/lib/fs/memoryLog";
 
 const TYPE_LABELS: Record<MemoryEntryType, string> = {
   correction: "תיקון",
@@ -13,20 +13,25 @@ const TYPE_LABELS: Record<MemoryEntryType, string> = {
   note: "הערה",
 };
 
-export default async function MemoryLogPage() {
-  const raw = await readMemoryLog();
-  const entries = parseMemoryLog(raw);
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+export function MemoryLogClient({
+  brandId,
+  initialEntries,
+}: {
+  brandId: string;
+  initialEntries: MemoryEntry[];
+}) {
+  const { data, mutate } = useSWR<{ entries: MemoryEntry[] }>(
+    `/api/memory-log?brandId=${encodeURIComponent(brandId)}`,
+    fetcher,
+    { fallbackData: { entries: initialEntries }, refreshInterval: 7000 }
+  );
+  const entries = data?.entries ?? initialEntries;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto w-full flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">🧠 יומן זיכרון דינאמי</h1>
-        <p className="text-muted-foreground mt-1">
-          כללים, תיקונים והעדפות שנצברו לאורך זמן. כל הסוכנים קוראים את היומן הזה לפני מענה.
-        </p>
-      </div>
-
-      <AddMemoryEntryForm />
+    <>
+      <AddMemoryEntryForm brandId={brandId} onSaved={() => mutate()} />
 
       <div className="flex flex-col gap-3">
         {entries.length === 0 && (
@@ -45,6 +50,6 @@ export default async function MemoryLogPage() {
           </Card>
         ))}
       </div>
-    </div>
+    </>
   );
 }

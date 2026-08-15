@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -12,8 +11,7 @@ const TYPES = [
   { value: "note", label: "הערה" },
 ] as const;
 
-export function AddMemoryEntryForm() {
-  const router = useRouter();
+export function AddMemoryEntryForm({ brandId, onSaved }: { brandId: string; onSaved?: () => void }) {
   const [agent, setAgent] = useState("");
   const [type, setType] = useState<(typeof TYPES)[number]["value"]>("note");
   const [summary, setSummary] = useState("");
@@ -27,13 +25,13 @@ export function AddMemoryEntryForm() {
       const res = await fetch("/api/memory-log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: agent.trim() || "user", type, summary: summary.trim() }),
+        body: JSON.stringify({ brandId, agent: agent.trim() || "user", type, summary: summary.trim() }),
       });
       if (!res.ok) throw new Error();
       setSummary("");
       setAgent("");
       setOpen(false);
-      router.refresh();
+      onSaved?.();
     } finally {
       setSubmitting(false);
     }

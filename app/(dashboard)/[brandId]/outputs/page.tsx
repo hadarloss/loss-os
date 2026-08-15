@@ -4,8 +4,13 @@ import { listOutputs } from "@/lib/fs/outputs";
 // Reads live data from disk — must not be statically cached at build time.
 export const dynamic = "force-dynamic";
 
-export default async function OutputsPage() {
-  const outputs = await listOutputs();
+export default async function OutputsPage({
+  params,
+}: {
+  params: Promise<{ brandId: string }>;
+}) {
+  const { brandId } = await params;
+  const outputs = await listOutputs(brandId);
 
   return (
     <div className="p-6 max-w-4xl mx-auto w-full flex flex-col gap-6">
@@ -15,7 +20,7 @@ export default async function OutputsPage() {
           קמפיינים שיווקיים ונכסי מיתוג ששמרתם מתוך שיחות עם הסוכנים.
         </p>
       </div>
-      <OutputsGalleryClient outputs={outputs} />
+      <OutputsGalleryClient brandId={brandId} outputs={outputs} />
     </div>
   );
 }

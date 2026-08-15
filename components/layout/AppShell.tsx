@@ -1,28 +1,29 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { BrandSwitcher } from "@/components/layout/BrandSwitcher";
 
 interface NavItem {
-  href: string;
+  href: (brandId: string) => string;
   label: string;
   icon: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: "/", label: "בית", icon: "🏠" },
-  { href: "/teams/marketing", label: "שיווק", icon: "📣" },
-  { href: "/teams/branding", label: "מיתוג", icon: "🎨" },
-  { href: "/onboarding", label: "אוריתה", icon: "🧭" },
-  { href: "/agents/quality_assurance", label: "ערן — QA", icon: "✅" },
-  { href: "/memory-log", label: "יומן זיכרון", icon: "🧠" },
-  { href: "/business-profile", label: "פרופיל עסקי", icon: "🗂️" },
-  { href: "/outputs", label: "תוצרים", icon: "📦" },
+  { href: (b) => `/${b}`, label: "בית", icon: "🏠" },
+  { href: (b) => `/${b}/teams/marketing`, label: "שיווק", icon: "📣" },
+  { href: (b) => `/${b}/teams/branding`, label: "מיתוג", icon: "🎨" },
+  { href: (b) => `/${b}/onboarding`, label: "אוריתה", icon: "🧭" },
+  { href: (b) => `/${b}/agents/quality_assurance`, label: "ערן — QA", icon: "✅" },
+  { href: (b) => `/${b}/memory-log`, label: "יומן זיכרון", icon: "🧠" },
+  { href: (b) => `/${b}/business-profile`, label: "פרופיל עסקי", icon: "🗂️" },
+  { href: (b) => `/${b}/outputs`, label: "תוצרים", icon: "📦" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
 }
 
@@ -35,6 +36,21 @@ async function handleLogout() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  // First path segment doubles as brandId on every dashboard route except the
+  // brand-picker root ("/") and the non-brand-scoped admin pages ("/admin/...").
+  const [firstSegment] = pathname.split("/").filter(Boolean);
+  const brandId = firstSegment && firstSegment !== "admin" ? firstSegment : null;
+
+  const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    // Refetch whenever the active brand changes (not just on mount) — otherwise a
+    // brand created or switched to after the initial load never appears here, and
+    // the <select>'s value falls back to whatever option happens to be first.
+    fetch("/api/brands")
+      .then((r) => r.json())
+      .then((d) => setBrands(d.brands ?? []))
+      .catch(() => {});
+  }, [brandId]);
 
   return (
     <div className="flex min-h-full w-full">
@@ -43,22 +59,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="text-sm font-semibold text-sidebar-foreground">צוות ה-AI שלי</div>
           <div className="text-xs text-muted-foreground">שיווק ומיתוג, במקום אחד</div>
         </div>
-        <nav className="flex flex-col gap-0.5">
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
-                isActive(pathname, item.href)
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-              )}
-            >
-              <span aria-hidden>{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          ))}
+
+        {brandId && <BrandSwitcher brands={brands} activeBrandId={brandId} />}
+
+        <nav className="flex flex-col gap-0.5 mt-1">
+          {brandId &&
+            NAV_ITEMS.map((item) => {
+              const href = item.href(brandId);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                    isActive(pathname, href)
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                      : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                  )}
+                >
+                  <span aria-hidden>{item.icon}</span>
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
         </nav>
         <button
           type="button"
@@ -82,23 +105,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               🚪 יציאה
             </button>
           </div>
-          <nav className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs whitespace-nowrap shrink-0 transition-colors",
-                  isActive(pathname, item.href)
-                    ? "bg-accent text-accent-foreground font-medium"
-                    : "text-muted-foreground hover:bg-accent/60"
-                )}
-              >
-                <span aria-hidden>{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
-            ))}
-          </nav>
+          {brandId && (
+            <nav className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1">
+              {NAV_ITEMS.map((item) => {
+                const href = item.href(brandId);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={cn(
+                      "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs whitespace-nowrap shrink-0 transition-colors",
+                      isActive(pathname, href)
+                        ? "bg-accent text-accent-foreground font-medium"
+                        : "text-muted-foreground hover:bg-accent/60"
+                    )}
+                  >
+                    <span aria-hidden>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+          )}
         </header>
         <main className="flex-1 min-w-0 flex flex-col">{children}</main>
       </div>

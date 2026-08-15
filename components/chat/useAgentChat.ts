@@ -20,6 +20,8 @@ export interface RoutingInfo {
 }
 
 interface UseAgentChatOptions {
+  /** Active brand — threaded to the chat API so business profile/memory log are brand-scoped. */
+  brandId: string;
   /** Chat directly with this agent, bypassing lead routing. */
   agentId?: string;
   /** Route through this team's lead — required when agentId is not set. */
@@ -47,7 +49,7 @@ function buildOutgoingContent(
   return [...blocks, { type: "text", text: finalText }];
 }
 
-export function useAgentChat({ agentId, team }: UseAgentChatOptions) {
+export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeAgentId, setActiveAgentId] = useState<string | undefined>(agentId);
   const [routing, setRouting] = useState<RoutingInfo | null>(null);
@@ -92,6 +94,7 @@ export function useAgentChat({ agentId, team }: UseAgentChatOptions) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            brandId,
             agentId: activeAgentId,
             team: activeAgentId ? undefined : team,
             message: outgoingContent,
@@ -154,7 +157,7 @@ export function useAgentChat({ agentId, team }: UseAgentChatOptions) {
         setIsStreaming(false);
       }
     },
-    [messages, activeAgentId, team, isStreaming, dropTrailingEmptyAssistant]
+    [messages, activeAgentId, team, brandId, isStreaming, dropTrailingEmptyAssistant]
   );
 
   return { messages, sendMessage, isStreaming, error, routing, activeAgentId };

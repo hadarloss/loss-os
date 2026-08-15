@@ -2,10 +2,11 @@ import type { AgentLite } from "@/components/chat/RoutingBreadcrumb";
 import type { MessageContentBlock } from "@/lib/agents/types";
 
 export function buildAgentsById(
-  agents: { id: string; name: string; icon: string }[]
+  agents: { id: string; name: string; icon: string; provider?: string; model?: string }[]
 ): Record<string, AgentLite> {
   const map: Record<string, AgentLite> = {};
-  for (const a of agents) map[a.id] = { name: a.name, icon: a.icon };
+  for (const a of agents)
+    map[a.id] = { name: a.name, icon: a.icon, provider: a.provider, model: a.model };
   return map;
 }
 
