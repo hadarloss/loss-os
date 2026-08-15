@@ -54,9 +54,22 @@ function buildRosterText(specialists: AgentDef[]): string {
  * a lead with a long persona (e.g. an appended brand guide) plus the full context block was blowing
  * past weaker OmniRoute fallback models' request-size limits and breaking routing entirely.
  */
+// Some leads' skill files run well past this for reasons unrelated to routing (e.g.
+// ray_branding_lead.md has ~150 lines of brand-guide reference material appended for her
+// specialists' benefit, not hers) — full detail like that isn't needed to pick an agent_id,
+// and free-tier OmniRoute fallback models reject oversized requests outright (413/400) even
+// after dropping the business-profile/memory-log context block. Cap what's actually sent.
+const ROUTING_PERSONA_CHAR_LIMIT = 4000;
+
 function buildRoutingSystemPrompt(lead: AgentDef, specialists: AgentDef[]): string {
+  const persona =
+    lead.systemPrompt.length > ROUTING_PERSONA_CHAR_LIMIT
+      ? lead.systemPrompt.slice(0, ROUTING_PERSONA_CHAR_LIMIT) +
+        "\n\n_(המשך הפרסונה קוצר לצורך ניתוב בלבד — התוכן המלא זמין למומחה/ית שתבחר/י בתגובה שלו/ה.)_"
+      : lead.systemPrompt;
+
   return (
-    lead.systemPrompt +
+    persona +
     "\n\n---\n\n## רשימת הסוכנים בצוות שלך (לצורך ניתוב בלבד — אלה המזהים היחידים התקפים)\n" +
     buildRosterText(specialists)
   );
@@ -271,6 +284,10 @@ async function routeToAgentOmniRoute(
   const response = await client.chat.completions.create({
     model: lead.model || DEFAULT_OMNIROUTE_MODEL,
     messages: toChatCompletionMessages(systemPrompt, history),
+    // Reasoning-capable routing models (e.g. Gemini) spend several hundred tokens thinking
+    // before emitting the tool call — leaving this unset falls back to whatever low default
+    // the underlying provider picks, silently truncating the response before the tool call.
+    max_tokens: 2048,
     tools: [
       {
         type: "function",
@@ -303,7 +320,7 @@ async function routeToAgentOmniRoute(
 }
 
 /** Routes to the Anthropic, OpenAI, or OmniRoute implementation based on the lead agent's `provider`. */
-export async function routeToAgent(
+function routeToAgentOnce(
   lead: AgentDef,
   specialists: AgentDef[],
   history: ConversationMessage[],
@@ -317,6 +334,26 @@ export async function routeToAgent(
     return routeToAgentOmniRoute(lead, specialists, history, businessProfile, memoryLog);
   }
   return routeToAgentAnthropic(lead, specialists, history, businessProfile, memoryLog);
+}
+
+/**
+ * Routes to the Anthropic, OpenAI, or OmniRoute implementation based on the lead agent's
+ * `provider`, retrying once on failure — OmniRoute in particular has shown intermittent
+ * transient errors ("unknown provider for model X") unrelated to payload/content that a
+ * simple retry reliably absorbs, rather than surfacing a one-off gateway hiccup to the user.
+ */
+export async function routeToAgent(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[],
+  businessProfile: string,
+  memoryLog: string
+): Promise<RoutingDecision> {
+  try {
+    return await routeToAgentOnce(lead, specialists, history, businessProfile, memoryLog);
+  } catch {
+    return routeToAgentOnce(lead, specialists, history, businessProfile, memoryLog);
+  }
 }
 
 export interface StreamCallbacks {

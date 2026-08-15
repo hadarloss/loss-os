@@ -10,7 +10,7 @@ description: "מנהלת צוות המיתוג. מקבלת כל בקשה הקש�
 output_types: [routing_decision]
 order: 0
 provider: omniroute
-model: archetype-a-routing
+model: gemini/gemini-flash-latest
 ---
 ריי — מנהלת צוות מיתוג
 

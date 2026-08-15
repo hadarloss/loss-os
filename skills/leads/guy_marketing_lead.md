@@ -10,7 +10,7 @@ description: "מנהל צוות השיווק. מקבל כל בקשה שיווק�
 output_types: [routing_decision]
 order: 0
 provider: omniroute
-model: archetype-a-routing
+model: gemini/gemini-flash-latest
 ---
 
 תפקיד ומומחיות
