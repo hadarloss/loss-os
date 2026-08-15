@@ -9,6 +9,9 @@ import { getOpenAIClient, MissingOpenAIApiKeyError } from "@/lib/openai/client";
 import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute/client";
 import { AgentDef, ChatStreamEvent, Provider, Team } from "@/lib/agents/types";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
+import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+
+const OMNIROUTE_MODEL_VALUES = new Set(OMNIROUTE_MODEL_OPTIONS.map((o) => o.value));
 
 // Generous but bounded cap on a single attachment's base64 payload (~15MB raw file).
 const MAX_BASE64_LENGTH = 20_000_000;
@@ -44,6 +47,9 @@ const ChatRequestSchema = z.object({
   history: z
     .array(z.object({ role: z.enum(["user", "assistant"]), content: MessageContentSchema }))
     .default([]),
+  /** User-picked per-session override of the replying agent's model — restricted server-side
+   *  to the known OmniRoute combos regardless of what the client sends. */
+  model: z.string().optional(),
 });
 
 function sseLine(event: ChatStreamEvent): Uint8Array {
@@ -57,6 +63,11 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.message }, { status: 400 });
   }
   const { brandId, agentId, team, message, history } = parsed.data;
+  // Ignore anything outside the known combo list rather than rejecting the request —
+  // a stale client option shouldn't be able to break an otherwise-valid chat turn.
+  const modelOverride = parsed.data.model && OMNIROUTE_MODEL_VALUES.has(parsed.data.model)
+    ? parsed.data.model
+    : undefined;
 
   const guard = await requireBrandMember(brandId);
   if (guard.response) return guard.response;
@@ -137,6 +148,13 @@ export async function POST(req: NextRequest) {
           controller.enqueue(sseLine({ type: "error", message: "סוכן לא נמצא לאחר ניתוב." }));
           controller.close();
           return;
+        }
+
+        // Override only ever swaps the model string within the agent's own provider — the
+        // dropdown only ever offers OmniRoute combos, so a non-OmniRoute agent's model is
+        // left untouched even if a stale override value happens to be present.
+        if (modelOverride && agent.provider === "omniroute") {
+          agent = { ...agent, model: modelOverride };
         }
 
         await streamAgentReply(agent, fullHistory, businessProfile, memoryLog, {

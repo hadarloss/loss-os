@@ -55,6 +55,9 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
   const [routing, setRouting] = useState<RoutingInfo | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // User-picked model override for this browser session only — never persisted, and
+  // reset whenever this hook instance is recreated (e.g. switching agent/team/brand).
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
 
   const dropTrailingEmptyAssistant = useCallback(() => {
     setMessages((prev) => {
@@ -99,6 +102,7 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
             team: activeAgentId ? undefined : team,
             message: outgoingContent,
             history,
+            model: modelOverride ?? undefined,
           }),
         });
 
@@ -157,8 +161,17 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
         setIsStreaming(false);
       }
     },
-    [messages, activeAgentId, team, brandId, isStreaming, dropTrailingEmptyAssistant]
+    [messages, activeAgentId, team, brandId, isStreaming, modelOverride, dropTrailingEmptyAssistant]
   );
 
-  return { messages, sendMessage, isStreaming, error, routing, activeAgentId };
+  return {
+    messages,
+    sendMessage,
+    isStreaming,
+    error,
+    routing,
+    activeAgentId,
+    modelOverride,
+    setModelOverride,
+  };
 }

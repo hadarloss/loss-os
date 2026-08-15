@@ -9,12 +9,20 @@ import { extractText } from "@/components/chat/utils";
 import { processFile, type PendingAttachment } from "@/components/chat/fileAttachments";
 import { useVoiceInput } from "@/components/chat/useVoiceInput";
 import type { Team } from "@/lib/agents/types";
+import type { ModelOption } from "@/lib/agents/modelOptions";
 import { cn } from "@/lib/utils";
 
 export interface SaveContext {
   brandId: string;
   team: Team;
   deliverableType?: string;
+}
+
+export interface ModelSelector {
+  /** The model actually in effect right now — the override if set, else the active agent's default. */
+  current: string;
+  options: ModelOption[];
+  onChange: (model: string) => void;
 }
 
 const ATTACHMENT_ACCEPT =
@@ -36,6 +44,7 @@ export function ChatPanel({
   placeholder = "כתבו הודעה...",
   emptyState,
   saveContext,
+  modelSelector,
 }: {
   messages: ChatMessage[];
   onSend: (text: string, attachments?: PendingAttachment[]) => void;
@@ -46,6 +55,7 @@ export function ChatPanel({
   placeholder?: string;
   emptyState?: React.ReactNode;
   saveContext?: SaveContext;
+  modelSelector?: ModelSelector;
 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -90,6 +100,25 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+      {modelSelector && (
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">מודל בשיחה זו</span>
+          <select
+            value={modelSelector.current}
+            onChange={(e) => modelSelector.onChange(e.target.value)}
+            disabled={isStreaming}
+            className="rounded-md border border-input bg-transparent px-2 py-1 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            title="בחירת מודל לשיחה הנוכחית בלבד — לא נשמר לפעם הבאה"
+          >
+            {modelSelector.options.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {routing && (
         <div className="p-3 pb-0">
           <RoutingBreadcrumb routing={routing} agentsById={agentsById} />

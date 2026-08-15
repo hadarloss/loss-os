@@ -7,12 +7,13 @@ import { useAgentChat } from "@/components/chat/useAgentChat";
 import { Button } from "@/components/ui/button";
 import { extractText } from "@/components/chat/utils";
 import type { AgentLite } from "@/components/chat/RoutingBreadcrumb";
+import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
 
 const PROFILE_MARKER = "# תיק העסק";
 
 export function OnboardingClient({ brandId, agent }: { brandId: string; agent: AgentLite & { id: string } }) {
   const router = useRouter();
-  const { messages, sendMessage, isStreaming, error, routing } = useAgentChat({
+  const { messages, sendMessage, isStreaming, error, routing, modelOverride, setModelOverride } = useAgentChat({
     brandId,
     agentId: agent.id,
   });
@@ -64,6 +65,15 @@ export function OnboardingClient({ brandId, agent }: { brandId: string; agent: A
         routing={routing}
         agentsById={agentsById}
         placeholder="ספרו לי על העסק שלכם..."
+        modelSelector={
+          agent.provider === "omniroute"
+            ? {
+                current: modelOverride ?? agent.model ?? OMNIROUTE_MODEL_OPTIONS[0].value,
+                options: OMNIROUTE_MODEL_OPTIONS,
+                onChange: setModelOverride,
+              }
+            : undefined
+        }
         emptyState={
           <div className="text-sm text-muted-foreground p-3">
             {agent.icon} שלום! אני {agent.name}. בואו נכיר את העסק שלכם — תוכלו להתחיל פשוט לספר לי
