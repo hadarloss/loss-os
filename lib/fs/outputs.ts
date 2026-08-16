@@ -30,6 +30,8 @@ export interface OutputSummary {
   agentId: string;
   deliverableType: string;
   format: string;
+  status: "pending" | "approved" | "rejected";
+  version: number;
   createdAt: string;
 }
 
@@ -41,6 +43,8 @@ interface OutputRow {
   deliverable_type: string;
   file_path: string;
   format: string;
+  status: "pending" | "approved" | "rejected";
+  version: number;
   created_at: string;
 }
 
@@ -50,7 +54,7 @@ export async function saveOutput(params: {
   agentId: string;
   content: string;
   handoff: HandoffRecord;
-}): Promise<{ relativePath: string; format: "markdown" | "xlsx" }> {
+}): Promise<{ id: string; relativePath: string; format: "markdown" | "xlsx" }> {
   const folder = folderForTeam(params.team);
   const dir = safeJoin(OUTPUTS_DIR, folder);
   await fs.mkdir(dir, { recursive: true });
@@ -79,7 +83,7 @@ export async function saveOutput(params: {
            VALUES (?, ?, ?, ?, ?, ?, 'xlsx')`
         ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`);
 
-        return { relativePath, format: "xlsx" };
+        return { id, relativePath, format: "xlsx" };
       } catch {
         // fall through to markdown save below
       }
@@ -94,11 +98,12 @@ export async function saveOutput(params: {
   await fs.writeFile(mdPath, params.content, "utf-8");
   await fs.writeFile(metaPath, JSON.stringify(handoffWithPath, null, 2), "utf-8");
 
+  const id = randomUUID();
   db.prepare(
     `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format)
      VALUES (?, ?, ?, ?, ?, ?, 'markdown')`
   ).run(
-    randomUUID(),
+    id,
     params.brandId,
     params.agentId,
     params.team,
@@ -106,7 +111,7 @@ export async function saveOutput(params: {
     `${folder}/${baseName}.md`
   );
 
-  return { relativePath, format: "markdown" };
+  return { id, relativePath, format: "markdown" };
 }
 
 function rowToSummary(row: OutputRow): OutputSummary {
@@ -119,6 +124,8 @@ function rowToSummary(row: OutputRow): OutputSummary {
     agentId: row.agent_id,
     deliverableType: row.deliverable_type,
     format: row.format,
+    status: row.status,
+    version: row.version,
     createdAt: row.created_at,
   };
 }
@@ -193,4 +200,57 @@ export async function getOutputFileById(
   } catch {
     return null;
   }
+}
+
+export interface OutputForRevision {
+  id: string;
+  brandId: string;
+  agentId: string;
+  team: Team;
+  deliverableType: string;
+  format: string;
+  content: string;
+}
+
+/** Full row + current text content — used to build a "here's your previous work" revision prompt.
+ *  For xlsx outputs there's no meaningful text form to hand back to the model, so this only
+ *  supports markdown outputs; callers should check `format` before offering "request changes". */
+export async function getOutputForRevision(
+  brandId: string,
+  id: string
+): Promise<OutputForRevision | null> {
+  const row = db
+    .prepare(`SELECT * FROM outputs WHERE brand_id = ? AND id = ?`)
+    .get(brandId, id) as OutputRow | undefined;
+  if (!row || row.format !== "markdown") return null;
+
+  const filePath = safeJoin(OUTPUTS_DIR, row.file_path);
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    brandId: row.brand_id,
+    agentId: row.agent_id,
+    team: row.team,
+    deliverableType: row.deliverable_type,
+    format: row.format,
+    content,
+  };
+}
+
+/** Overwrites a markdown output's file content in place (same path/id) — used after a revision. */
+export async function overwriteOutputContent(brandId: string, id: string, newContent: string): Promise<boolean> {
+  const row = db
+    .prepare(`SELECT * FROM outputs WHERE brand_id = ? AND id = ?`)
+    .get(brandId, id) as OutputRow | undefined;
+  if (!row || row.format !== "markdown") return false;
+
+  const filePath = safeJoin(OUTPUTS_DIR, row.file_path);
+  await fs.writeFile(filePath, newContent, "utf-8");
+  return true;
 }

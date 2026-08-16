@@ -19,10 +19,11 @@ export function DirectAgentChatClient({
   /** Other agents (e.g. team sidebar members) worth having name/icon lookups for, if referenced elsewhere. */
   extraAgentsForLookup?: AgentDef[];
 }) {
-  const { messages, sendMessage, isStreaming, error, routing, modelOverride, setModelOverride } = useAgentChat({
-    brandId,
-    agentId: agent.id,
-  });
+  const { messages, sendMessage, isStreaming, error, routing, handoffChain, modelOverride, setModelOverride } =
+    useAgentChat({
+      brandId,
+      agentId: agent.id,
+    });
   const agentsById = buildAgentsById([agent, ...extraAgentsForLookup]);
 
   return (
@@ -32,6 +33,7 @@ export function DirectAgentChatClient({
       isStreaming={isStreaming}
       error={error}
       routing={routing}
+      handoffChain={handoffChain}
       agentsById={agentsById}
       placeholder={`כתבו הודעה ל${agent.name}...`}
       saveContext={saveTeam ? { brandId, team: saveTeam } : undefined}

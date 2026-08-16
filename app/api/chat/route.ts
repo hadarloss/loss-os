@@ -1,15 +1,29 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { NextRequest } from "next/server";
 import { getAgentById, getTeamTree } from "@/lib/agents/registry";
-import { routeToAgent, streamAgentReply, ConversationMessage } from "@/lib/agents/router";
+import { routeToAgent, streamAgentReply, classifyNextStep, ConversationMessage } from "@/lib/agents/router";
 import { readBusinessProfile } from "@/lib/fs/businessProfile";
 import { readMemoryLog } from "@/lib/fs/memoryLog";
+import { saveOutput } from "@/lib/fs/outputs";
 import { getAnthropicClient, MissingApiKeyError } from "@/lib/anthropic/client";
 import { getOpenAIClient, MissingOpenAIApiKeyError } from "@/lib/openai/client";
 import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute/client";
-import { AgentDef, ChatStreamEvent, Provider, Team } from "@/lib/agents/types";
+import { AgentDef, ChatStreamEvent, HandoffRecord, MessageContentBlock, Provider, Team } from "@/lib/agents/types";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+
+// Hard cap on autonomous specialist-to-specialist handoffs within a single user turn — a
+// safety net against a classification loop, never expected to be hit in normal use.
+const MAX_AUTONOMOUS_HOPS = 5;
+
+function extractPlainText(content: string | MessageContentBlock[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((b): b is Extract<MessageContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
 
 const OMNIROUTE_MODEL_VALUES = new Set(OMNIROUTE_MODEL_OPTIONS.map((o) => o.value));
 
@@ -129,6 +143,14 @@ export async function POST(req: NextRequest) {
 
   const fullHistory: ConversationMessage[] = [...history, { role: "user", content: message }];
 
+  const applyModelOverride = (a: AgentDef): AgentDef =>
+    // Override only ever swaps the model string within the agent's own provider — the dropdown
+    // only ever offers OmniRoute combos, so a non-OmniRoute agent's model is left untouched even
+    // if a stale override value happens to be present.
+    modelOverride && a.provider === "omniroute" ? { ...a, model: modelOverride } : a;
+
+  const originalRequestText = extractPlainText(message);
+
   const stream = new ReadableStream({
     async start(controller) {
       try {
@@ -150,24 +172,127 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // Override only ever swaps the model string within the agent's own provider — the
-        // dropdown only ever offers OmniRoute combos, so a non-OmniRoute agent's model is
-        // left untouched even if a stale override value happens to be present.
-        if (modelOverride && agent.provider === "omniroute") {
-          agent = { ...agent, model: modelOverride };
-        }
+        agent = applyModelOverride(agent);
 
-        await streamAgentReply(agent, fullHistory, businessProfile, memoryLog, {
-          onText: (delta) => controller.enqueue(sseLine({ type: "token", text: delta })),
-          onDone: (_fullText, resolvedModel) => {
-            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel }));
+        // The autonomous handoff pool is the full specialist roster of the current agent's
+        // team — already fetched above when routed through a lead, but not yet when the turn
+        // started as a direct agent chat (e.g. picked from the sidebar).
+        let teamSpecialists = specialists;
+        if (teamSpecialists.length === 0 && (agent.team === "marketing" || agent.team === "branding")) {
+          const tree = await getTeamTree(agent.team);
+          teamSpecialists = tree.specialists;
+        }
+        // Fewer than 2 specialists (i.e. just this agent, or none) means there's no one to hand
+        // off to — classification would offer an empty agent_id enum, which some providers
+        // reject outright. Skip straight to today's behavior (stream, done, no auto-save).
+        const canAutoManage = teamSpecialists.length > 1;
+
+        let hop = 0;
+        while (true) {
+          let fullText = "";
+          let resolvedModelForHop: string | undefined;
+          let streamError: Error | null = null;
+
+          await new Promise<void>((resolve) => {
+            streamAgentReply(
+              agent!,
+              fullHistory,
+              businessProfile,
+              memoryLog,
+              {
+                onText: (delta) => {
+                  fullText += delta;
+                  controller.enqueue(sseLine({ type: "token", text: delta }));
+                },
+                onDone: (text, resolvedModel) => {
+                  fullText = text;
+                  resolvedModelForHop = resolvedModel;
+                  resolve();
+                },
+                onError: (error) => {
+                  streamError = error;
+                  resolve();
+                },
+              },
+              routingBrief
+            ).catch((error) => {
+              streamError = error instanceof Error ? error : new Error(String(error));
+              resolve();
+            });
+          });
+
+          if (streamError) {
+            controller.enqueue(sseLine({ type: "error", message: (streamError as Error).message }));
             controller.close();
-          },
-          onError: (error) => {
-            controller.enqueue(sseLine({ type: "error", message: error.message }));
+            return;
+          }
+
+          if (!canAutoManage || hop >= MAX_AUTONOMOUS_HOPS) {
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
             controller.close();
-          },
-        }, routingBrief);
+            return;
+          }
+
+          // Keep the running history in sync so a subsequent hop (or the classifier) sees this
+          // reply as prior context, same as a normal back-and-forth turn would.
+          fullHistory.push({ role: "assistant", content: fullText });
+
+          const decision = await classifyNextStep(agent, fullText, originalRequestText, teamSpecialists);
+
+          if (decision.type === "deliverable_complete") {
+            const now = new Date().toISOString();
+            const handoff: HandoffRecord = {
+              task_id: randomUUID(),
+              from_agent: leadAgent?.id ?? agent.id,
+              to_agent: agent.id,
+              status: "done",
+              deliverable_type: decision.deliverableType,
+              output_path: null,
+              requested_by: "auto",
+              created_at: now,
+              updated_at: now,
+              notes: "",
+            };
+            try {
+              const saved = await saveOutput({
+                brandId,
+                team: agent.team as Team,
+                agentId: agent.id,
+                content: fullText,
+                handoff,
+              });
+              controller.enqueue(
+                sseLine({ type: "output_saved", outputId: saved.id, format: saved.format, agentId: agent.id })
+              );
+            } catch {
+              // Saving is a bonus, not a requirement — if it fails for any reason, the reply
+              // already streamed to the user in full, so there's nothing to roll back.
+            }
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
+            controller.close();
+            return;
+          }
+
+          if (decision.type === "needs_user_input") {
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
+            controller.close();
+            return;
+          }
+
+          // handoff_needed
+          const nextAgent = teamSpecialists.find((s) => s.id === decision.agentId);
+          if (!nextAgent) {
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
+            controller.close();
+            return;
+          }
+          controller.enqueue(
+            sseLine({ type: "handoff", from: agent.id, to: nextAgent.id, reason: decision.brief || "המשך עבודה" })
+          );
+          agent = applyModelOverride(nextAgent);
+          routingBrief = decision.brief;
+          hop++;
+        }
       } catch (error) {
         controller.enqueue(
           sseLine({ type: "error", message: error instanceof Error ? error.message : String(error) })

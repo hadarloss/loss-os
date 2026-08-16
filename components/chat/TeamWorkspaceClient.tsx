@@ -17,8 +17,17 @@ export function TeamWorkspaceClient({
   lead: AgentDef;
   specialists: AgentDef[];
 }) {
-  const { messages, sendMessage, isStreaming, error, routing, activeAgentId, modelOverride, setModelOverride } =
-    useAgentChat({ brandId, team });
+  const {
+    messages,
+    sendMessage,
+    isStreaming,
+    error,
+    routing,
+    handoffChain,
+    activeAgentId,
+    modelOverride,
+    setModelOverride,
+  } = useAgentChat({ brandId, team });
   const agentsById = buildAgentsById([lead, ...specialists]);
   const defaultModel = agentsById[activeAgentId ?? lead.id]?.model ?? lead.model;
 
@@ -29,6 +38,7 @@ export function TeamWorkspaceClient({
       isStreaming={isStreaming}
       error={error}
       routing={routing}
+      handoffChain={handoffChain}
       agentsById={agentsById}
       placeholder={`כתבו הודעה ל${lead.name}...`}
       saveContext={{ brandId, team }}

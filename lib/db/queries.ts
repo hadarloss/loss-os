@@ -104,3 +104,53 @@ export function addBrandMember(brandId: string, userId: string, role: BrandRole)
     `INSERT OR IGNORE INTO brand_members (brand_id, user_id, role) VALUES (?, ?, ?)`
   ).run(brandId, userId, role);
 }
+
+export type OutputStatus = "pending" | "approved" | "rejected";
+export type OutputReviewAction = "approved" | "rejected" | "changes_requested";
+
+export interface OutputReviewRow {
+  id: string;
+  output_id: string;
+  brand_id: string;
+  author_user_id: string | null;
+  action: OutputReviewAction;
+  note: string | null;
+  created_at: string;
+}
+
+export function setOutputStatus(id: string, status: OutputStatus): void {
+  db.prepare(`UPDATE outputs SET status = ? WHERE id = ?`).run(status, id);
+}
+
+/** Returns the new version number. */
+export function bumpOutputVersion(id: string): number {
+  db.prepare(`UPDATE outputs SET version = version + 1 WHERE id = ?`).run(id);
+  const row = db.prepare(`SELECT version FROM outputs WHERE id = ?`).get(id) as { version: number };
+  return row.version;
+}
+
+export function addOutputReview(params: {
+  outputId: string;
+  brandId: string;
+  authorUserId?: string;
+  action: OutputReviewAction;
+  note?: string;
+}): void {
+  db.prepare(
+    `INSERT INTO output_reviews (id, output_id, brand_id, author_user_id, action, note)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    randomUUID(),
+    params.outputId,
+    params.brandId,
+    params.authorUserId ?? null,
+    params.action,
+    params.note ?? null
+  );
+}
+
+export function listOutputReviews(outputId: string): OutputReviewRow[] {
+  return db
+    .prepare(`SELECT * FROM output_reviews WHERE output_id = ? ORDER BY created_at ASC`)
+    .all(outputId) as OutputReviewRow[];
+}

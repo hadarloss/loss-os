@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RoutingBreadcrumb, type AgentLite } from "@/components/chat/RoutingBreadcrumb";
-import type { ChatMessage, RoutingInfo } from "@/components/chat/useAgentChat";
+import type { ChatMessage, RoutingInfo, HandoffHop } from "@/components/chat/useAgentChat";
 import { extractText } from "@/components/chat/utils";
 import { processFile, type PendingAttachment } from "@/components/chat/fileAttachments";
 import { useVoiceInput } from "@/components/chat/useVoiceInput";
@@ -40,6 +40,7 @@ export function ChatPanel({
   isStreaming,
   error,
   routing,
+  handoffChain = [],
   agentsById,
   placeholder = "כתבו הודעה...",
   emptyState,
@@ -51,6 +52,7 @@ export function ChatPanel({
   isStreaming: boolean;
   error: string | null;
   routing: RoutingInfo | null;
+  handoffChain?: HandoffHop[];
   agentsById: Record<string, AgentLite>;
   placeholder?: string;
   emptyState?: React.ReactNode;
@@ -100,9 +102,9 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      {routing && (
+      {(routing || handoffChain.length > 0) && (
         <div className="p-3 pb-0">
-          <RoutingBreadcrumb routing={routing} agentsById={agentsById} />
+          <RoutingBreadcrumb routing={routing} agentsById={agentsById} handoffChain={handoffChain} />
         </div>
       )}
 
@@ -242,9 +244,15 @@ function MessageBubble({
   const isUser = message.role === "user";
   const text = extractText(message.content);
   const showSave =
-    !isUser && saveContext && message.agentId && text && !(isLast && isStreaming) && !savedAsXlsx;
+    !isUser &&
+    saveContext &&
+    message.agentId &&
+    text &&
+    !(isLast && isStreaming) &&
+    !savedAsXlsx &&
+    !message.outputSaved;
   const showSaveMemory =
-    !isUser && saveContext && text && !(isLast && isStreaming);
+    !isUser && saveContext && text && !(isLast && isStreaming) && !message.outputSaved;
 
   const handleSave = async () => {
     if (!saveContext || !message.agentId) return;
@@ -324,6 +332,16 @@ function MessageBubble({
             ✅ הגאנט נשמר כקובץ אקסל בתוצרים —{" "}
             <a
               href={`/${saveContext!.brandId}/outputs`}
+              className="underline underline-offset-2 hover:text-primary"
+            >
+              מעבר לתוצרים
+            </a>
+          </span>
+        ) : message.outputSaved ? (
+          <span>
+            ✅ התוצר נשמר בתוצרים לאישור —{" "}
+            <a
+              href={saveContext ? `/${saveContext.brandId}/outputs` : "#"}
               className="underline underline-offset-2 hover:text-primary"
             >
               מעבר לתוצרים

@@ -514,3 +514,131 @@ export async function streamAgentReply(
   }
   return streamAgentReplyAnthropic(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
 }
+
+// --- Autonomous next-step classification (deliverable done / hand off / ask the user) ---
+
+export type NextStepDecision =
+  | { type: "deliverable_complete"; deliverableType: string }
+  | { type: "handoff_needed"; agentId: string; brief: string }
+  | { type: "needs_user_input" };
+
+const NEXT_STEP_TOOL_NAME = "decide_next_step";
+const NEXT_STEP_CLASSIFIER_MODEL = "gemini/gemini-flash-latest";
+
+const NEXT_STEP_SYSTEM_PROMPT = [
+  "את/ה מסווג/ת החלטות פנימי בצוות AI שיווקי/מיתוגי — לא פונה למשתמש ישירות.",
+  "תפקידך היחיד: לקרוא את התגובה האחרונה של סוכן, ולהחליט מה השלב הבא בתהליך.",
+  "",
+  "שלוש אפשרויות בלבד:",
+  '- deliverable_complete — הסוכן סיים תוצר סופי לבקשה (למשל: גאנט מוכן, רעיון/קופי/תוכן סופי שנמסר). זה כולל מקרה שבו הסוכן שאל שאלת חידוד בתחילת התהליך, קיבל תשובה, ואז השלים את התוצר.',
+  '- handoff_needed — הבקשה המקורית עדיין לא הושלמה במלואה, וסוכן/ית אחר/ת בצוות צריכ/ה להמשיך את העבודה (למשל: תוכן נכתב אבל צריך עכשיו בדיקת עקביות מיתוגית). ציינו agent_id מדויק מתוך הרשימה, ו-brief קצר עם מה שהסוכן הבא חייב לדעת.',
+  '- needs_user_input — יש שאלה אמיתית וחוסמת שרק המשתמש יכול לענות עליה (לא "איזה טון תרצה" קטן, אלא צומת החלטה אמיתי, או שהתגובה עצמה היא שאלת חידוד ראשונית לפני תחילת העבודה).',
+  "",
+  "בספק — בחרו needs_user_input. אין להמציא agent_id שלא ברשימה.",
+].join("\n");
+
+function buildNextStepToolSchema(specialistIds: string[]) {
+  return {
+    type: "object" as const,
+    properties: {
+      decision: {
+        type: "string",
+        enum: ["deliverable_complete", "handoff_needed", "needs_user_input"],
+        description: "השלב הבא בתהליך",
+      },
+      deliverable_type: {
+        type: "string",
+        description: "רק אם decision=deliverable_complete: סוג התוצר, למשל gantt, social_post, brand_review",
+      },
+      agent_id: {
+        type: "string",
+        enum: specialistIds,
+        description: "רק אם decision=handoff_needed: מזהה מדויק של הסוכן הבא מתוך הרשימה",
+      },
+      brief: {
+        type: "string",
+        description: "רק אם decision=handoff_needed: דגשים קצרים שהסוכן הבא חייב לדעת",
+      },
+    },
+    required: ["decision"],
+  };
+}
+
+interface NextStepToolInput {
+  decision: "deliverable_complete" | "handoff_needed" | "needs_user_input";
+  deliverable_type?: string;
+  agent_id?: string;
+  brief?: string;
+}
+
+/**
+ * Runs after a specialist's reply finishes streaming — decides whether the turn is done (save
+ * as a deliverable), needs another specialist to continue autonomously, or needs to stop and
+ * show the user a real question. Deliberately fails safe: any error, missing tool call, or
+ * unparseable response falls back to `needs_user_input`, i.e. today's behavior (show the reply,
+ * do nothing automatic) — a classification hiccup should never silently drop or misroute work.
+ * Only implemented for `provider: omniroute` agents (all 39 agents in this app use it); other
+ * providers also fall back to `needs_user_input`.
+ */
+export async function classifyNextStep(
+  agent: AgentDef,
+  replyText: string,
+  originalRequest: string,
+  specialists: AgentDef[]
+): Promise<NextStepDecision> {
+  if (agent.provider !== "omniroute" || !replyText.trim()) {
+    return { type: "needs_user_input" };
+  }
+
+  const others = specialists.filter((s) => s.id !== agent.id);
+  const specialistIds = others.map((s) => s.id);
+
+  try {
+    const client = getOmniRouteClient();
+    const response = await client.chat.completions.create({
+      model: NEXT_STEP_CLASSIFIER_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            NEXT_STEP_SYSTEM_PROMPT +
+            "\n\n## חברי צוות זמינים להעברת עבודה (handoff_needed בלבד)\n" +
+            buildRosterText(others),
+        },
+        {
+          role: "user",
+          content: `הבקשה המקורית מהמשתמש:\n${originalRequest.slice(0, 1000)}\n\nהתגובה של ${agent.name} (${agent.id}):\n${replyText.slice(0, 3000)}`,
+        },
+      ],
+      max_tokens: 1024,
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: NEXT_STEP_TOOL_NAME,
+            description: "קבע/י את השלב הבא בתהליך",
+            parameters: buildNextStepToolSchema(specialistIds),
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: NEXT_STEP_TOOL_NAME } },
+    });
+
+    const call = response.choices[0]?.message.tool_calls?.find(
+      (tc): tc is OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall => tc.type === "function"
+    );
+    if (!call) return { type: "needs_user_input" };
+
+    const input = JSON.parse(call.function.arguments) as NextStepToolInput;
+
+    if (input.decision === "handoff_needed" && input.agent_id && specialistIds.includes(input.agent_id)) {
+      return { type: "handoff_needed", agentId: input.agent_id, brief: input.brief?.trim() ?? "" };
+    }
+    if (input.decision === "deliverable_complete") {
+      return { type: "deliverable_complete", deliverableType: input.deliverable_type?.trim() || "general" };
+    }
+    return { type: "needs_user_input" };
+  } catch {
+    return { type: "needs_user_input" };
+  }
+}

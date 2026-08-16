@@ -75,12 +75,37 @@ export interface DoneEvent {
   resolvedModel?: string;
 }
 
+/** A specialist autonomously handed the request to another specialist mid-turn — distinct from
+ *  RoutingEvent, which is only the team lead's initial pick. Starts a new message bubble for the
+ *  next specialist's reply, which streams immediately after via further TokenEvents. */
+export interface HandoffEvent {
+  type: "handoff";
+  from: string;
+  to: string;
+  reason: string;
+}
+
+/** A specialist's reply was classified as a finished deliverable and auto-saved — the chat bubble
+ *  should show a short confirmation + link instead of the full text. */
+export interface OutputSavedEvent {
+  type: "output_saved";
+  outputId: string;
+  format: string;
+  agentId: string;
+}
+
 export interface ErrorEvent {
   type: "error";
   message: string;
 }
 
-export type ChatStreamEvent = RoutingEvent | TokenEvent | DoneEvent | ErrorEvent;
+export type ChatStreamEvent =
+  | RoutingEvent
+  | TokenEvent
+  | DoneEvent
+  | HandoffEvent
+  | OutputSavedEvent
+  | ErrorEvent;
 
 // --- Message content (text + file attachments) ---
 // A focused subset of Anthropic's content block shapes — structurally compatible

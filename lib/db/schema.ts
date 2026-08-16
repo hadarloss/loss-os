@@ -60,12 +60,37 @@ db.exec(`
     deliverable_type TEXT NOT NULL,
     file_path TEXT NOT NULL,
     format TEXT NOT NULL DEFAULT 'markdown',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS output_reviews (
+    id TEXT PRIMARY KEY,
+    output_id TEXT NOT NULL REFERENCES outputs(id),
+    brand_id TEXT NOT NULL REFERENCES brands(id),
+    author_user_id TEXT REFERENCES users(id),
+    action TEXT NOT NULL CHECK (action IN ('approved', 'rejected', 'changes_requested')),
+    note TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE INDEX IF NOT EXISTS idx_brand_members_user ON brand_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_memory_log_brand ON memory_log_entries(brand_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_outputs_brand ON outputs(brand_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_output_reviews_output ON output_reviews(output_id, created_at);
 `);
+
+// `CREATE TABLE IF NOT EXISTS` doesn't add columns to a table that already exists from before
+// this migration — the `outputs` table shipped without status/version originally, so add them
+// defensively for any pre-existing database file.
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn("outputs", "status", "status TEXT NOT NULL DEFAULT 'pending'");
+ensureColumn("outputs", "version", "version INTEGER NOT NULL DEFAULT 1");
 
 export default db;

@@ -109,13 +109,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </>
   );
 
+  const homeHref = brandId ? `/${brandId}` : "/";
+
   return (
-    <div className="flex min-h-full w-full">
+    <div className="flex h-full w-full">
       <aside className="hidden md:flex w-56 shrink-0 flex-col border-e border-border bg-sidebar text-sidebar-foreground p-3 gap-1">
-        <div className="px-2 py-3 mb-2">
+        <Link href={homeHref} className="px-2 py-3 mb-2 rounded-lg hover:bg-sidebar-accent/60 transition-colors">
           <div className="text-sm font-semibold text-sidebar-foreground">צוות ה-AI שלי</div>
           <div className="text-xs text-muted-foreground">שיווק ומיתוג, במקום אחד</div>
-        </div>
+        </Link>
 
         {brandId && <BrandSwitcher brands={brands} activeBrandId={brandId} />}
 
@@ -153,10 +155,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="md:hidden border-b border-border p-3 flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">צוות ה-AI שלי</div>
+            <Link href={homeHref} className="text-sm font-semibold">
+              צוות ה-AI שלי
+            </Link>
             <div className="flex items-center gap-3">
               <Link href="/account" className="text-xs text-muted-foreground hover:text-foreground">
                 👤 אזור אישי
@@ -206,7 +210,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </nav>
           )}
         </header>
-        <main className="flex-1 min-w-0 flex flex-col">{children}</main>
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col">{children}</main>
       </div>
     </div>
   );
