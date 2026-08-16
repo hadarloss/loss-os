@@ -61,6 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const tree = await getTeamTree(plan.team as Team);
   const teamSpecialists = tree.specialists;
+  const teamRoster = tree.lead ? [tree.lead, ...teamSpecialists] : teamSpecialists;
 
   const [businessProfile, memoryLog] = await Promise.all([
     readBusinessProfile(brandId!),
@@ -102,6 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           originalRequestText: plan.goal,
           applyModelOverride: (a) => a,
           teamSpecialists,
+          teamRoster,
           canAutoManage: true,
           agent,
           routingBrief: firstTask.brief,
