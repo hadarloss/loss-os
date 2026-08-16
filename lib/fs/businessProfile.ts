@@ -92,6 +92,16 @@ export function approveBusinessProfile(brandId: string, userId: string): boolean
   return result.changes > 0;
 }
 
+/** Rejects a profile that's awaiting review — sends it back to `template` so the user can redo
+ *  onboarding with אוריתה, instead of approving a draft they don't want live. No-op (returns
+ *  false) if it isn't currently `pending_approval`, matching approveBusinessProfile's guard. */
+export async function rejectPendingBusinessProfile(brandId: string): Promise<boolean> {
+  const current = await ensureSeeded(brandId);
+  if (current.status !== "pending_approval") return false;
+  await resetBusinessProfile(brandId);
+  return true;
+}
+
 /** Wipes the business profile back to the unfilled template and clears its approval state —
  *  used by the home page's "reset" action. Does not touch memory log entries or outputs; callers
  *  that want those cleared too (e.g. the reset endpoint) do it separately. */

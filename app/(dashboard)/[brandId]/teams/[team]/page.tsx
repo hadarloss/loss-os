@@ -19,7 +19,7 @@ export default async function TeamPage({
   // approved — see writeBusinessProfile's status transitions and the reset flow.
   const profileStatus = await getBusinessProfileStatus(brandId);
   if (profileStatus === "template") redirect(`/${brandId}/onboarding`);
-  if (profileStatus === "pending_approval") redirect(`/${brandId}/business-profile`);
+  if (profileStatus === "pending_approval") redirect(`/${brandId}/business-file`);
 
   const { lead, specialists } = await getTeamTree(team as Team);
   if (!lead) notFound();

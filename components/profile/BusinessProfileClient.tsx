@@ -46,6 +46,7 @@ export function BusinessProfileClient({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
 
   // Keep the draft synced with live-polled content while not actively editing,
   // so a change made elsewhere (chat, another tab) shows up without stomping local edits.
@@ -86,15 +87,40 @@ export function BusinessProfileClient({
     }
   };
 
+  const handleReject = async () => {
+    const confirmed = window.confirm(
+      "לדחות את תיק העסק? הטיוטה תימחק ותחזרו לשיחה עם אוריתה כדי להכין אחת חדשה."
+    );
+    if (!confirmed) return;
+
+    setRejecting(true);
+    try {
+      const res = await fetch(`/api/business-profile/reject?brandId=${encodeURIComponent(brandId)}`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error();
+      router.push(`/${brandId}/onboarding`);
+      router.refresh();
+    } catch {
+      window.alert("הדחייה נכשלה — נסו שוב.");
+      setRejecting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>
         <div className="flex gap-2">
           {status === "pending_approval" && (
-            <Button onClick={handleApprove} disabled={approving}>
-              {approving ? "מאשר..." : "✓ אשר תיק עסק ופתח את הצוותים"}
-            </Button>
+            <>
+              <Button variant="outline" onClick={handleReject} disabled={rejecting || approving}>
+                {rejecting ? "דוחה..." : "✕ דחייה"}
+              </Button>
+              <Button onClick={handleApprove} disabled={approving || rejecting}>
+                {approving ? "מאשר..." : "✓ אשר תיק עסק ופתח את הצוותים"}
+              </Button>
+            </>
           )}
           {editing ? (
             <>

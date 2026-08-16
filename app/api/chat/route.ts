@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Marketing/branding team work is locked until the business profile has been reviewed and
-  // explicitly approved on the business-profile page (see writeBusinessProfile's status
+  // explicitly approved on the business-file page (see writeBusinessProfile's status
   // transitions) — onboarding and QA (both `team: "core"`) are always reachable regardless,
   // since onboarding is exactly the escape hatch out of this gate.
   const gateTeam = leadAgent?.team ?? (directAgent && (directAgent.team === "marketing" || directAgent.team === "branding") ? directAgent.team : null);
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
       const reason =
         status === "template"
           ? "צריך קודם להשלים היכרות עם אוריתה לפני שאפשר לעבוד עם צוותי השיווק והמיתוג."
-          : "תיק העסק ממתין לאישור שלך בעמוד \"פרופיל עסקי\" לפני שאפשר להתחיל לעבוד עם הצוותים.";
+          : "תיק העסק ממתין לאישור שלך בעמוד \"תיק העסק\" לפני שאפשר להתחיל לעבוד עם הצוותים.";
       return Response.json({ error: reason, gate: status }, { status: 403 });
     }
   }

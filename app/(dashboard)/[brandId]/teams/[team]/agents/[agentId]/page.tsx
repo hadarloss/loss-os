@@ -18,7 +18,7 @@ export default async function TeamAgentPage({
   // Same gate as the team home page — a direct link to a specialist shouldn't bypass it.
   const profileStatus = await getBusinessProfileStatus(brandId);
   if (profileStatus === "template") redirect(`/${brandId}/onboarding`);
-  if (profileStatus === "pending_approval") redirect(`/${brandId}/business-profile`);
+  if (profileStatus === "pending_approval") redirect(`/${brandId}/business-file`);
 
   const [{ lead, specialists }, agent] = await Promise.all([
     getTeamTree(team as Team),

@@ -77,7 +77,7 @@ export default async function HomePage({ params }: { params: Promise<{ brandId: 
             </div>
             <Button
               nativeButton={false}
-              render={<Link href={`/${brandId}/business-profile`}>🗂️ לצפייה ואישור</Link>}
+              render={<Link href={`/${brandId}/business-file`}>🗂️ לצפייה ואישור</Link>}
             />
           </CardContent>
         </Card>
@@ -143,13 +143,13 @@ export default async function HomePage({ params }: { params: Promise<{ brandId: 
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-1.5">🗂️ פרופיל עסקי</CardTitle>
+            <CardTitle className="flex items-center gap-1.5">🗂️ תיק העסק</CardTitle>
             <CardDescription>
               {isTemplate ? "טרם הוגדר" : profile.status === "pending_approval" ? "ממתין לאישור" : "מאושר"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Link href={`/${brandId}/business-profile`} className="text-sm text-primary hover:underline">
+            <Link href={`/${brandId}/business-file`} className="text-sm text-primary hover:underline">
               לצפייה/עריכה ←
             </Link>
           </CardContent>
@@ -202,5 +202,5 @@ function TeamCard({
 
   // Locked cards route to whichever step is actually next (onboarding vs. approval) instead of
   // the team itself — the team page would just redirect there anyway, this saves the round trip.
-  return <Link href={locked ? `/${brandId}/business-profile` : href}>{card}</Link>;
+  return <Link href={locked ? `/${brandId}/business-file` : href}>{card}</Link>;
 }

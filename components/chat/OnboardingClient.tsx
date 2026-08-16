@@ -56,7 +56,7 @@ export function OnboardingClient({ brandId, agent }: { brandId: string; agent: A
     if (m.role !== "assistant" || (isLastMessage && isStreaming)) return m;
     const text = extractText(m.content);
     if (!text.includes(PROFILE_MARKER)) return m;
-    return { ...m, content: "🗂️ טיוטת תיק עסק — לצפייה ושמירה ראו למעלה, או בעמוד \"פרופיל עסקי\"." };
+    return { ...m, content: "🗂️ טיוטת תיק עסק — לצפייה ושמירה ראו למעלה, או בעמוד \"תיק העסק\"." };
   });
 
   const handleSaveProfile = async () => {
@@ -78,7 +78,7 @@ export function OnboardingClient({ brandId, agent }: { brandId: string; agent: A
         throw new Error(data.error || "שמירה נכשלה");
       }
       setSaveState("saved");
-      router.push(`/${brandId}/business-profile`);
+      router.push(`/${brandId}/business-file`);
       router.refresh();
     } catch (e) {
       setSaveState("error");
