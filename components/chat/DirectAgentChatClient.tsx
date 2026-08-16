@@ -3,7 +3,7 @@
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useAgentChat } from "@/components/chat/useAgentChat";
 import { buildAgentsById } from "@/components/chat/utils";
-import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+import { modelOptionsForProvider } from "@/lib/agents/modelOptions";
 import type { AgentDef, Team } from "@/lib/agents/types";
 
 export function DirectAgentChatClient({
@@ -19,12 +19,22 @@ export function DirectAgentChatClient({
   /** Other agents (e.g. team sidebar members) worth having name/icon lookups for, if referenced elsewhere. */
   extraAgentsForLookup?: AgentDef[];
 }) {
-  const { messages, sendMessage, isStreaming, error, routing, handoffChain, modelOverride, setModelOverride } =
-    useAgentChat({
-      brandId,
-      agentId: agent.id,
-    });
+  const {
+    messages,
+    sendMessage,
+    isStreaming,
+    error,
+    routing,
+    handoffChain,
+    modelOverride,
+    setModelOverride,
+    resetConversation,
+  } = useAgentChat({
+    brandId,
+    agentId: agent.id,
+  });
   const agentsById = buildAgentsById([agent, ...extraAgentsForLookup]);
+  const providerOptions = modelOptionsForProvider(agent.provider);
 
   return (
     <ChatPanel
@@ -37,11 +47,15 @@ export function DirectAgentChatClient({
       agentsById={agentsById}
       placeholder={`כתבו הודעה ל${agent.name}...`}
       saveContext={saveTeam ? { brandId, team: saveTeam } : undefined}
+      onRefresh={resetConversation}
       modelSelector={
-        agent.provider === "omniroute"
+        providerOptions.length > 0
           ? {
-              current: modelOverride ?? agent.model ?? OMNIROUTE_MODEL_OPTIONS[0].value,
-              options: OMNIROUTE_MODEL_OPTIONS,
+              current:
+                providerOptions.find((o) => o.value === modelOverride)?.value ??
+                agent.model ??
+                providerOptions[0].value,
+              options: providerOptions,
               onChange: setModelOverride,
             }
           : undefined

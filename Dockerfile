@@ -38,6 +38,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --chown=nextjs:nodejs skills ./skills
 COPY --chown=nextjs:nodejs context ./context
 COPY --chown=nextjs:nodejs outputs ./outputs
+COPY --chown=nextjs:nodejs uploads ./uploads
 
 USER nextjs
 EXPOSE 3000

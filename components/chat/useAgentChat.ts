@@ -344,6 +344,21 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
     }
   }, [plan, brandId]);
 
+  /** Clears the conversation back to a blank slate — same effect as if sessionStorage never had
+   *  anything for this thread. Doesn't touch the model override (a per-session preference the
+   *  user likely wants to keep across a fresh start) or cancel an in-flight stream. */
+  const resetConversation = useCallback(() => {
+    setMessages([]);
+    setRouting(null);
+    setHandoffChain([]);
+    setActiveAgentId(agentId);
+    setPlan(null);
+    setError(null);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(keyRef.current);
+    }
+  }, [agentId]);
+
   return {
     messages,
     sendMessage,
@@ -357,5 +372,6 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
     plan,
     approvePlan,
     cancelPlan,
+    resetConversation,
   };
 }

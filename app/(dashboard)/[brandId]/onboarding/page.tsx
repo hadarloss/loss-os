@@ -19,7 +19,10 @@ export default async function OnboardingPage({
           {agent.name} — {agent.role}
         </h1>
       </div>
-      <OnboardingClient brandId={brandId} agent={{ id: agent.id, name: agent.name, icon: agent.icon }} />
+      <OnboardingClient
+        brandId={brandId}
+        agent={{ id: agent.id, name: agent.name, icon: agent.icon, provider: agent.provider, model: agent.model }}
+      />
     </div>
   );
 }

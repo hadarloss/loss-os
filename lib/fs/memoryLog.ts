@@ -68,6 +68,12 @@ export async function appendMemoryEntry(
   ).run(randomUUID(), brandId, entry.authorUserId ?? null, entry.type, entry.agent, entry.summary);
 }
 
+/** Wipes every memory-log entry for a brand — used by the business-profile "reset" action, which
+ *  clears accumulated preferences/corrections alongside the profile content itself. */
+export function clearMemoryLog(brandId: string): void {
+  db.prepare(`DELETE FROM memory_log_entries WHERE brand_id = ?`).run(brandId);
+}
+
 /** Thin wrapper kept for call sites that still parse a rendered markdown log (legacy shape). */
 export function parseMemoryLog(raw: string): MemoryEntry[] {
   const ENTRY_HEADER_RE = /^## (.+?) — (correction|new_rule|preference|note)$/;

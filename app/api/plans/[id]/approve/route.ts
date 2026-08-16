@@ -4,7 +4,7 @@ import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { getAgentById, getTeamTree } from "@/lib/agents/registry";
 import { ConversationMessage } from "@/lib/agents/router";
 import { runOrchestrationLoop, sseLine } from "@/lib/agents/orchestration";
-import { readBusinessProfile } from "@/lib/fs/businessProfile";
+import { readBusinessProfile, getBusinessProfileStatus } from "@/lib/fs/businessProfile";
 import { readMemoryLog } from "@/lib/fs/memoryLog";
 import {
   getPlan,
@@ -46,6 +46,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   if (!plan.team) {
     return Response.json({ error: "לתוכנית אין צוות משויך" }, { status: 400 });
+  }
+
+  // Defense in depth — the same gate the chat route checks before a plan can even be proposed
+  // (a reset that happens between proposing and approving a plan shouldn't let it slip through).
+  const profileStatus = await getBusinessProfileStatus(brandId!);
+  if (profileStatus !== "approved") {
+    return Response.json(
+      { error: "תיק העסק אינו מאושר — לא ניתן להריץ תוכנית עבודה." },
+      { status: 403 }
+    );
   }
 
   refreshReadyPlanTasks(id);

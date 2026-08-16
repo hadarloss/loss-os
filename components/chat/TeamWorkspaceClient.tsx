@@ -3,7 +3,7 @@
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useAgentChat } from "@/components/chat/useAgentChat";
 import { buildAgentsById } from "@/components/chat/utils";
-import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+import { modelOptionsForProvider } from "@/lib/agents/modelOptions";
 import type { AgentDef, Team } from "@/lib/agents/types";
 
 export function TeamWorkspaceClient({
@@ -30,9 +30,12 @@ export function TeamWorkspaceClient({
     plan,
     approvePlan,
     cancelPlan,
+    resetConversation,
   } = useAgentChat({ brandId, team });
   const agentsById = buildAgentsById([lead, ...specialists]);
-  const defaultModel = agentsById[activeAgentId ?? lead.id]?.model ?? lead.model;
+  const activeAgent = (activeAgentId && [lead, ...specialists].find((a) => a.id === activeAgentId)) || lead;
+  const defaultModel = activeAgent.model;
+  const providerOptions = modelOptionsForProvider(activeAgent.provider);
 
   return (
     <ChatPanel
@@ -48,11 +51,19 @@ export function TeamWorkspaceClient({
       plan={plan}
       onApprovePlan={approvePlan}
       onCancelPlan={cancelPlan}
+      onRefresh={resetConversation}
       modelSelector={
-        lead.provider === "omniroute"
+        providerOptions.length > 0
           ? {
-              current: modelOverride ?? defaultModel ?? OMNIROUTE_MODEL_OPTIONS[0].value,
-              options: OMNIROUTE_MODEL_OPTIONS,
+              // A stale override from a previously active agent on a different provider (e.g.
+              // picked an OpenAI model while the lead was active, then handed off to an
+              // Anthropic specialist) is only ever ignored, never shown selected against a list
+              // it doesn't belong to.
+              current:
+                providerOptions.find((o) => o.value === modelOverride)?.value ??
+                defaultModel ??
+                providerOptions[0].value,
+              options: providerOptions,
               onChange: setModelOverride,
             }
           : undefined

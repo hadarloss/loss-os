@@ -3,14 +3,15 @@ import { NextRequest } from "next/server";
 import { getAgentById, getTeamTree } from "@/lib/agents/registry";
 import { routeToAgent, proposePlan, ConversationMessage } from "@/lib/agents/router";
 import { runOrchestrationLoop, sseLine } from "@/lib/agents/orchestration";
-import { readBusinessProfile } from "@/lib/fs/businessProfile";
+import { readBusinessProfile, getBusinessProfileStatus } from "@/lib/fs/businessProfile";
 import { readMemoryLog } from "@/lib/fs/memoryLog";
+import { saveUpload } from "@/lib/fs/uploads";
 import { getAnthropicClient, MissingApiKeyError } from "@/lib/anthropic/client";
 import { getOpenAIClient, MissingOpenAIApiKeyError } from "@/lib/openai/client";
 import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute/client";
 import { AgentDef, MessageContentBlock, Provider, Team } from "@/lib/agents/types";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
-import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+import { ALL_MODEL_VALUES, modelOptionsForProvider } from "@/lib/agents/modelOptions";
 import {
   createAgentJob,
   updateAgentJob,
@@ -31,7 +32,6 @@ function extractPlainText(content: string | MessageContentBlock[]): string {
     .join("\n");
 }
 
-const OMNIROUTE_MODEL_VALUES = new Set(OMNIROUTE_MODEL_OPTIONS.map((o) => o.value));
 
 // Generous but bounded cap on a single attachment's base64 payload (~15MB raw file).
 const MAX_BASE64_LENGTH = 20_000_000;
@@ -45,6 +45,7 @@ const ContentBlockSchema = z.discriminatedUnion("type", [
       media_type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
       data: z.string().max(MAX_BASE64_LENGTH),
     }),
+    filename: z.string().optional(),
   }),
   z.object({
     type: z.literal("document"),
@@ -79,9 +80,11 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.message }, { status: 400 });
   }
   const { brandId, agentId, team, message, history } = parsed.data;
-  // Ignore anything outside the known combo list rather than rejecting the request —
-  // a stale client option shouldn't be able to break an otherwise-valid chat turn.
-  const modelOverride = parsed.data.model && OMNIROUTE_MODEL_VALUES.has(parsed.data.model)
+  // Ignore anything outside the known model list rather than rejecting the request —
+  // a stale client option shouldn't be able to break an otherwise-valid chat turn. Final
+  // provider-match check happens per-agent in applyModelOverride below, since which agent
+  // (and therefore which provider) answers isn't known yet for a team-routed request.
+  const modelOverride = parsed.data.model && ALL_MODEL_VALUES.has(parsed.data.model)
     ? parsed.data.model
     : undefined;
 
@@ -112,6 +115,43 @@ export async function POST(req: NextRequest) {
     specialists = tree.specialists;
     if (!leadAgent) {
       return Response.json({ error: `לא נמצא מנהל צוות עבור ${team}` }, { status: 400 });
+    }
+  }
+
+  // Marketing/branding team work is locked until the business profile has been reviewed and
+  // explicitly approved on the business-profile page (see writeBusinessProfile's status
+  // transitions) — onboarding and QA (both `team: "core"`) are always reachable regardless,
+  // since onboarding is exactly the escape hatch out of this gate.
+  const gateTeam = leadAgent?.team ?? (directAgent && (directAgent.team === "marketing" || directAgent.team === "branding") ? directAgent.team : null);
+  if (gateTeam) {
+    const status = await getBusinessProfileStatus(brandId);
+    if (status !== "approved") {
+      const reason =
+        status === "template"
+          ? "צריך קודם להשלים היכרות עם אוריתה לפני שאפשר לעבוד עם צוותי השיווק והמיתוג."
+          : "תיק העסק ממתין לאישור שלך בעמוד \"פרופיל עסקי\" לפני שאפשר להתחיל לעבוד עם הצוותים.";
+      return Response.json({ error: reason, gate: status }, { status: 403 });
+    }
+  }
+
+  // Best-effort: persist any image/document attachments in this message to the uploads
+  // gallery. Never blocks or fails the chat turn itself — a save hiccup here just means the
+  // file won't show up in the gallery, the reply still streams normally either way.
+  if (Array.isArray(message)) {
+    for (const block of message) {
+      if (block.type !== "image" && block.type !== "document") continue;
+      try {
+        await saveUpload({
+          brandId,
+          userId: guard.user.id,
+          filename: block.type === "image" ? block.filename ?? "תמונה" : block.title ?? "מסמך",
+          kind: block.type,
+          mimeType: block.source.media_type,
+          base64Data: block.source.data,
+        });
+      } catch {
+        // ignored — see comment above
+      }
     }
   }
 
@@ -146,10 +186,12 @@ export async function POST(req: NextRequest) {
   const fullHistory: ConversationMessage[] = [...history, { role: "user", content: message }];
 
   const applyModelOverride = (a: AgentDef): AgentDef =>
-    // Override only ever swaps the model string within the agent's own provider — the dropdown
-    // only ever offers OmniRoute combos, so a non-OmniRoute agent's model is left untouched even
-    // if a stale override value happens to be present.
-    modelOverride && a.provider === "omniroute" ? { ...a, model: modelOverride } : a;
+    // Override only ever swaps the model string within the agent's own provider — a client-sent
+    // value that belongs to a different provider's option list (e.g. a leftover OpenAI selection
+    // applied to an Anthropic agent after switching agents) is ignored rather than applied.
+    modelOverride && modelOptionsForProvider(a.provider).some((o) => o.value === modelOverride)
+      ? { ...a, model: modelOverride }
+      : a;
 
   const originalRequestText = extractPlainText(message);
 

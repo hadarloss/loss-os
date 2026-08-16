@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: (b) => `/${b}/memory-log`, label: "יומן זיכרון", icon: "🧠" },
   { href: (b) => `/${b}/business-profile`, label: "פרופיל עסקי", icon: "🗂️" },
   { href: (b) => `/${b}/outputs`, label: "תוצרים", icon: "📦" },
+  { href: (b) => `/${b}/uploads`, label: "העלאות", icon: "🖼️" },
 ];
 
 function isActive(pathname: string, href: string): boolean {

@@ -54,6 +54,11 @@ context/MEMORY_LOG.md
 outputs/**/*.md
 outputs/**/*.meta.json
 
+# User-uploaded chat attachments (uploads gallery) — real files written at runtime, only
+# uploads/.gitkeep is tracked so a brand's directory structure exists before first use.
+uploads/*
+!uploads/.gitkeep
+
 # SQLite data dir — real app.db is runtime state, not tracked (see lib/db/client.ts)
 /data/*.db
 /data/*.db-journal

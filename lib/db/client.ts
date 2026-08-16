@@ -27,5 +27,9 @@ ensureDataDirSync();
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+// A container redeploy briefly overlaps the outgoing and incoming process on the same WAL file
+// (old container still shutting down while the new one's migrations run) — without a busy
+// timeout, better-sqlite3 throws SQLITE_BUSY immediately instead of waiting the lock out.
+db.pragma("busy_timeout = 5000");
 
 export default db;

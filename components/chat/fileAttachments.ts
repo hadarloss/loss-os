@@ -58,7 +58,11 @@ export async function processFile(file: File): Promise<PendingAttachment> {
       id,
       filename: file.name,
       kind: "image",
-      block: { type: "image", source: { type: "base64", media_type: file.type as ImageMediaType, data } },
+      block: {
+        type: "image",
+        source: { type: "base64", media_type: file.type as ImageMediaType, data },
+        filename: file.name,
+      },
     };
   }
 

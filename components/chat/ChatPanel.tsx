@@ -50,6 +50,7 @@ export function ChatPanel({
   plan,
   onApprovePlan,
   onCancelPlan,
+  onRefresh,
 }: {
   messages: ChatMessage[];
   onSend: (text: string, attachments?: PendingAttachment[]) => void;
@@ -66,6 +67,8 @@ export function ChatPanel({
   plan?: Plan | null;
   onApprovePlan?: () => void;
   onCancelPlan?: () => void;
+  /** Clears the conversation back to a blank slate — shown as a small button in the header. */
+  onRefresh?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -110,6 +113,21 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+      {onRefresh && (
+        <div className="flex items-center justify-end p-2 pb-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            title="שיחה חדשה — מנקה את ההיסטוריה הנוכחית"
+            onClick={onRefresh}
+            disabled={isStreaming || messages.length === 0}
+            className="h-7 gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            🔄 שיחה חדשה
+          </Button>
+        </div>
+      )}
       {(routing || handoffChain.length > 0) && (
         <div className="p-3 pb-0">
           <RoutingBreadcrumb routing={routing} agentsById={agentsById} handoffChain={handoffChain} />

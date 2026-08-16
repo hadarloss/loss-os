@@ -185,6 +185,9 @@ export interface TextContentBlock {
 export interface ImageContentBlock {
   type: "image";
   source: { type: "base64"; media_type: ImageMediaType; data: string };
+  /** Original filename — optional because the underlying Anthropic/OpenAI block shapes this
+   *  mirrors don't carry one; only used server-side to persist the file to the uploads gallery. */
+  filename?: string;
 }
 
 export interface DocumentContentBlock {

@@ -1,5 +1,5 @@
 import { BusinessProfileClient } from "@/components/profile/BusinessProfileClient";
-import { readBusinessProfile } from "@/lib/fs/businessProfile";
+import { readBusinessProfileFull } from "@/lib/fs/businessProfile";
 
 // Reads live data from disk — must not be statically cached at build time.
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export default async function BusinessProfilePage({
   params: Promise<{ brandId: string }>;
 }) {
   const { brandId } = await params;
-  const content = await readBusinessProfile(brandId);
+  const profile = await readBusinessProfileFull(brandId);
 
   return (
     <div className="p-6 max-w-3xl mx-auto w-full flex flex-col gap-6">
@@ -24,7 +24,11 @@ export default async function BusinessProfilePage({
           .
         </p>
       </div>
-      <BusinessProfileClient brandId={brandId} initialContent={content} />
+      <BusinessProfileClient
+        brandId={brandId}
+        initialContent={profile.content}
+        initialStatus={profile.status}
+      />
     </div>
   );
 }
