@@ -2,6 +2,7 @@ import { z } from "zod";
 import { NextRequest } from "next/server";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { setOutputStatus, addOutputReview, listOutputReviews } from "@/lib/db/queries";
+import { deleteOutput } from "@/lib/fs/outputs";
 
 const PatchSchema = z.object({
   status: z.enum(["approved", "rejected"]),
@@ -19,15 +20,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const guard = await requireBrandMember(brandId);
   if (guard.response) return guard.response;
 
-  setOutputStatus(id, parsed.data.status);
+  // Rejecting removes the deliverable entirely — the dashboard is for usable final work, not a
+  // graveyard of rejected drafts — so there's nothing to log a review against afterward.
+  if (parsed.data.status === "rejected") {
+    const deleted = await deleteOutput(brandId!, id);
+    if (!deleted) return Response.json({ error: "לא נמצא" }, { status: 404 });
+    return Response.json({ ok: true, deleted: true });
+  }
+
+  setOutputStatus(id, "approved");
   addOutputReview({
     outputId: id,
     brandId: brandId!,
     authorUserId: guard.user.id,
-    action: parsed.data.status,
+    action: "approved",
   });
 
-  return Response.json({ ok: true, status: parsed.data.status });
+  return Response.json({ ok: true, status: "approved" });
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

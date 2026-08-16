@@ -4,6 +4,7 @@ import path from "path";
 import { safeJoin, slugify } from "@/lib/fs/paths";
 import { HandoffRecord, Team } from "@/lib/agents/types";
 import db from "@/lib/db/schema";
+import { deleteOutputRow } from "@/lib/db/queries";
 import { parseGanttFromContent, buildGanttWorkbook } from "@/lib/fs/generators/gantt";
 
 /** deliverable_type values that should attempt an xlsx Gantt render before falling back to markdown. */
@@ -45,7 +46,17 @@ interface OutputRow {
   format: string;
   status: "pending" | "approved" | "rejected";
   version: number;
+  title: string | null;
   created_at: string;
+}
+
+function fallbackTitle(content: string): string {
+  const firstLine = content
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!firstLine) return "תוצר ללא כותרת";
+  return firstLine.replace(/^#+\s*/, "").slice(0, 80);
 }
 
 export async function saveOutput(params: {
@@ -54,12 +65,16 @@ export async function saveOutput(params: {
   agentId: string;
   content: string;
   handoff: HandoffRecord;
+  /** Short human-readable title — falls back to the first line of content when omitted
+   *  (manual saves that predate the auto-title classifier). */
+  title?: string;
 }): Promise<{ id: string; relativePath: string; format: "markdown" | "xlsx" }> {
   const folder = folderForTeam(params.team);
   const dir = safeJoin(OUTPUTS_DIR, folder);
   await fs.mkdir(dir, { recursive: true });
 
   const baseName = `${params.handoff.task_id}-${slugify(params.agentId)}`;
+  const title = params.title?.trim() || fallbackTitle(params.content);
 
   // Gantt-shaped deliverables render to .xlsx when the content contains a parseable
   // fenced ```json task list; anything else (or a parse failure) falls back to plain
@@ -79,9 +94,9 @@ export async function saveOutput(params: {
 
         const id = randomUUID();
         db.prepare(
-          `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format)
-           VALUES (?, ?, ?, ?, ?, ?, 'xlsx')`
-        ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`);
+          `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format, title)
+           VALUES (?, ?, ?, ?, ?, ?, 'xlsx', ?)`
+        ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`, title);
 
         return { id, relativePath, format: "xlsx" };
       } catch {
@@ -100,15 +115,16 @@ export async function saveOutput(params: {
 
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format)
-     VALUES (?, ?, ?, ?, ?, ?, 'markdown')`
+    `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format, title)
+     VALUES (?, ?, ?, ?, ?, ?, 'markdown', ?)`
   ).run(
     id,
     params.brandId,
     params.agentId,
     params.team,
     params.handoff.deliverable_type,
-    `${folder}/${baseName}.md`
+    `${folder}/${baseName}.md`,
+    title
   );
 
   return { id, relativePath, format: "markdown" };
@@ -120,7 +136,7 @@ function rowToSummary(row: OutputRow): OutputSummary {
     id: row.id,
     filename,
     team: row.team,
-    title: filename.replace(/\.(md|xlsx)$/, ""),
+    title: row.title?.trim() || filename.replace(/\.(md|xlsx)$/, ""),
     agentId: row.agent_id,
     deliverableType: row.deliverable_type,
     format: row.format,
@@ -128,6 +144,25 @@ function rowToSummary(row: OutputRow): OutputSummary {
     version: row.version,
     createdAt: row.created_at,
   };
+}
+
+/** Deletes an output's file(s) + DB row (and its review history) entirely — used when a user
+ *  rejects a deliverable, which should remove it from the dashboard rather than just flag it. */
+export async function deleteOutput(brandId: string, id: string): Promise<boolean> {
+  const row = db
+    .prepare(`SELECT * FROM outputs WHERE brand_id = ? AND id = ?`)
+    .get(brandId, id) as OutputRow | undefined;
+  if (!row) return false;
+
+  const filePath = safeJoin(OUTPUTS_DIR, row.file_path);
+  const metaPath = filePath.replace(/\.(md|xlsx)$/, ".meta.json");
+  await Promise.all([
+    fs.unlink(filePath).catch(() => {}),
+    fs.unlink(metaPath).catch(() => {}),
+  ]);
+
+  deleteOutputRow(id);
+  return true;
 }
 
 export async function listOutputs(brandId: string, team?: Team): Promise<OutputSummary[]> {

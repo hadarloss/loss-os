@@ -518,7 +518,7 @@ export async function streamAgentReply(
 // --- Autonomous next-step classification (deliverable done / hand off / ask the user) ---
 
 export type NextStepDecision =
-  | { type: "deliverable_complete"; deliverableType: string }
+  | { type: "deliverable_complete"; deliverableType: string; title: string }
   | { type: "handoff_needed"; agentId: string; brief: string }
   | { type: "needs_user_input" };
 
@@ -533,10 +533,11 @@ const NEXT_STEP_SYSTEM_PROMPT = [
   "תפקידך היחיד: לקרוא את התגובה האחרונה של סוכן, ולהחליט מה השלב הבא בתהליך.",
   "",
   "שלוש אפשרויות בלבד:",
-  '- deliverable_complete — הסוכן סיים תוצר סופי לבקשה (למשל: גאנט מוכן, רעיון/קופי/תוכן סופי שנמסר). זה כולל מקרה שבו הסוכן שאל שאלת חידוד בתחילת התהליך, קיבל תשובה, ואז השלים את התוצר.',
-  '- handoff_needed — הבקשה המקורית עדיין לא הושלמה במלואה, וסוכן/ית אחר/ת בצוות צריכ/ה להמשיך את העבודה (למשל: תוכן נכתב אבל צריך עכשיו בדיקת עקביות מיתוגית). ציינו agent_id מדויק מתוך הרשימה, ו-brief קצר עם מה שהסוכן הבא חייב לדעת.',
-  '- needs_user_input — יש שאלה אמיתית וחוסמת שרק המשתמש יכול לענות עליה (לא "איזה טון תרצה" קטן, אלא צומת החלטה אמיתי, או שהתגובה עצמה היא שאלת חידוד ראשונית לפני תחילת העבודה).',
+  "- deliverable_complete — הסוכן מסר חומר קצה שימושי בפועל: קופי סופי, רעיון קריאייטיב מגובש, גאנט/לוח זמנים, בריף מלא, טקסט/מלל מוכן לפרסום, המלצה אסטרטגית מגובשת וכו'. זה תמיד תוכן ממשי שאפשר להשתמש בו כמו שהוא.",
+  "- handoff_needed — הבקשה המקורית עדיין לא הושלמה במלואה, וסוכן/ית אחר/ת בצוות צריכ/ה להמשיך את העבודה (למשל: תוכן נכתב אבל צריך עכשיו בדיקת עקביות מיתוגית). ציינו agent_id מדויק מתוך הרשימה, ו-brief קצר עם מה שהסוכן הבא חייב לדעת.",
+  '- needs_user_input — כל מה שאינו תוצר קצה בפועל: שאלת חידוד, בקשת אישור/הרשאה להמשיך (למשל "האם להפעיל את הצוות על זה?", "לאשר שאני ממשיך?"), עדכון סטטוס על תהליך, או כל תגובה שהיא על *התהליך* ולא *התוצר עצמו*. גם אם הסוכן "סיים לדבר" — אם מה שהוא אמר אינו חומר קצה שימושי, זו needs_user_input, לא deliverable_complete.',
   "",
+  'דוגמה שלילית חשובה: "קיבלתי, אני מפעיל/ה את הצוות על הבריף הזה — לאשר?" הוא תיאום תהליך, לא תוצר — needs_user_input.',
   "בספק — בחרו needs_user_input. אין להמציא agent_id שלא ברשימה.",
 ].join("\n");
 
@@ -552,6 +553,12 @@ function buildNextStepToolSchema(specialistIds: string[]) {
       deliverable_type: {
         type: "string",
         description: "רק אם decision=deliverable_complete: סוג התוצר, למשל gantt, social_post, brand_review",
+      },
+      title: {
+        type: "string",
+        description:
+          "רק אם decision=deliverable_complete: כותרת קצרה וברורה לתוצר (עד 80 תווים) שתוצג בעמוד התוצרים — " +
+          'תיאור אמיתי של מה זה, לא מספר סידורי. לדוגמה: "רעיון לקמפיין השקת קולקציית הסתיו" או "גאנט תוכן לשבועיים הקרובים".',
       },
       agent_id: {
         type: "string",
@@ -570,6 +577,7 @@ function buildNextStepToolSchema(specialistIds: string[]) {
 interface NextStepToolInput {
   decision: "deliverable_complete" | "handoff_needed" | "needs_user_input";
   deliverable_type?: string;
+  title?: string;
   agent_id?: string;
   brief?: string;
 }
@@ -638,7 +646,11 @@ export async function classifyNextStep(
       return { type: "handoff_needed", agentId: input.agent_id, brief: input.brief?.trim() ?? "" };
     }
     if (input.decision === "deliverable_complete") {
-      return { type: "deliverable_complete", deliverableType: input.deliverable_type?.trim() || "general" };
+      return {
+        type: "deliverable_complete",
+        deliverableType: input.deliverable_type?.trim() || "general",
+        title: input.title?.trim().slice(0, 80) || "",
+      };
     }
     return { type: "needs_user_input" };
   } catch {

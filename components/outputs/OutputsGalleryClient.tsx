@@ -18,17 +18,18 @@ interface SpecialistLite {
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
-const STATUS_LABEL: Record<OutputSummary["status"], string> = {
-  pending: "ממתין לאישור",
-  approved: "מאושר",
-  rejected: "נדחה",
-};
+function groupByAgent(items: OutputSummary[], specialists: SpecialistLite[]) {
+  const byAgent = new Map<string, OutputSummary[]>();
+  for (const o of items) byAgent.set(o.agentId, [...(byAgent.get(o.agentId) ?? []), o]);
 
-const STATUS_VARIANT: Record<OutputSummary["status"], "secondary" | "default" | "destructive"> = {
-  pending: "secondary",
-  approved: "default",
-  rejected: "destructive",
-};
+  const knownIds = new Set(specialists.map((s) => s.id));
+  const orphanIds = [...byAgent.keys()].filter((id) => !knownIds.has(id));
+  const sections: SpecialistLite[] = [
+    ...specialists.filter((s) => byAgent.has(s.id)),
+    ...orphanIds.map((id) => ({ id, name: id, icon: "🤖", team: "core" as const })),
+  ];
+  return { byAgent, sections };
+}
 
 export function OutputsGalleryClient({
   brandId,
@@ -70,41 +71,34 @@ export function OutputsGalleryClient({
     }
   };
 
-  const outputsByAgent = new Map<string, OutputSummary[]>();
-  for (const o of outputs) {
-    outputsByAgent.set(o.agentId, [...(outputsByAgent.get(o.agentId) ?? []), o]);
-  }
-  // Agents with at least one output, in registry order; any agent_id present on an output but
-  // no longer in the registry (renamed/removed skill file) still gets a fallback section.
-  const knownIds = new Set(specialists.map((s) => s.id));
-  const orphanAgentIds = [...outputsByAgent.keys()].filter((id) => !knownIds.has(id));
-  const sections: SpecialistLite[] = [
-    ...specialists.filter((s) => outputsByAgent.has(s.id)),
-    ...orphanAgentIds.map((id) => ({ id, name: id, icon: "🤖", team: "core" as const })),
-  ];
+  // Rejecting deletes the output server-side, so only pending/approved ever show up here.
+  const pending = outputs.filter((o) => o.status === "pending");
+  const approved = outputs.filter((o) => o.status === "approved");
 
-  if (sections.length === 0) {
+  if (pending.length === 0 && approved.length === 0) {
     return <p className="text-sm text-muted-foreground py-6">אין עדיין תוצרים שמורים כאן.</p>;
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {sections.map((agent) => (
-        <div key={agent.id} className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium flex items-center gap-1.5">
-            <span aria-hidden>{agent.icon}</span>
-            {agent.name}
-            <span className="text-xs text-muted-foreground font-normal">
-              ({outputsByAgent.get(agent.id)?.length ?? 0})
-            </span>
-          </h2>
-          <div className="grid sm:grid-cols-2 gap-3">
-            {outputsByAgent.get(agent.id)?.map((item) => (
-              <OutputCard key={item.id} brandId={brandId} item={item} onOpen={openOutput} onChanged={() => mutate()} />
-            ))}
-          </div>
-        </div>
-      ))}
+    <div className="flex flex-col gap-8">
+      <OutputSection
+        title="⏳ ממתינים לאישור"
+        items={pending}
+        specialists={specialists}
+        brandId={brandId}
+        onOpen={openOutput}
+        onChanged={() => mutate()}
+        emptyText="אין תוצרים הממתינים לאישור."
+      />
+      <OutputSection
+        title="✅ מאושרים"
+        items={approved}
+        specialists={specialists}
+        brandId={brandId}
+        onOpen={openOutput}
+        onChanged={() => mutate()}
+        emptyText="אין עדיין תוצרים מאושרים."
+      />
 
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -131,6 +125,52 @@ export function OutputsGalleryClient({
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function OutputSection({
+  title,
+  items,
+  specialists,
+  brandId,
+  onOpen,
+  onChanged,
+  emptyText,
+}: {
+  title: string;
+  items: OutputSummary[];
+  specialists: SpecialistLite[];
+  brandId: string;
+  onOpen: (output: OutputSummary) => void;
+  onChanged: () => void;
+  emptyText: string;
+}) {
+  const { byAgent, sections } = groupByAgent(items, specialists);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <h2 className="text-base font-semibold">
+        {title} <span className="text-sm text-muted-foreground font-normal">({items.length})</span>
+      </h2>
+      {sections.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{emptyText}</p>
+      ) : (
+        sections.map((agent) => (
+          <div key={agent.id} className="flex flex-col gap-2">
+            <h3 className="text-sm font-medium flex items-center gap-1.5 text-muted-foreground">
+              <span aria-hidden>{agent.icon}</span>
+              {agent.name}
+              <span className="text-xs font-normal">({byAgent.get(agent.id)?.length ?? 0})</span>
+            </h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {byAgent.get(agent.id)?.map((item) => (
+                <OutputCard key={item.id} brandId={brandId} item={item} onOpen={onOpen} onChanged={onChanged} />
+              ))}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -164,7 +204,6 @@ function OutputCard({
       onChanged();
     } catch {
       setActionError("שגיאה — נסה/י שוב");
-    } finally {
       setBusy(false);
     }
   };
@@ -204,16 +243,20 @@ function OutputCard({
               {item.deliverableType} · גרסה {item.version}
             </CardDescription>
           </button>
-          <Badge variant={STATUS_VARIANT[item.status]} className="shrink-0">
-            {STATUS_LABEL[item.status]}
-          </Badge>
+          {item.status === "approved" && (
+            <Badge variant="default" className="shrink-0">
+              מאושר
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <div className="flex gap-1.5 flex-wrap">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => decide("approved")}>
-            ✓ אישור
-          </Button>
+          {item.status !== "approved" && (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => decide("approved")}>
+              ✓ אישור
+            </Button>
+          )}
           <Button size="sm" variant="outline" disabled={busy} onClick={() => decide("rejected")}>
             ✕ דחייה
           </Button>

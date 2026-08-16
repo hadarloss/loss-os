@@ -75,15 +75,31 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- One row per autonomous turn (a user message through however many agent hops it takes) —
+  -- lets the dashboard show live per-agent progress without opening the chat itself.
+  CREATE TABLE IF NOT EXISTS agent_jobs (
+    id TEXT PRIMARY KEY,
+    brand_id TEXT NOT NULL REFERENCES brands(id),
+    team TEXT,
+    lead_agent_id TEXT,
+    current_agent_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'needs_input', 'error')) DEFAULT 'running',
+    label TEXT NOT NULL DEFAULT '',
+    hop_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_brand_members_user ON brand_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_memory_log_brand ON memory_log_entries(brand_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_outputs_brand ON outputs(brand_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_output_reviews_output ON output_reviews(output_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_agent_jobs_brand ON agent_jobs(brand_id, updated_at);
 `);
 
 // `CREATE TABLE IF NOT EXISTS` doesn't add columns to a table that already exists from before
-// this migration — the `outputs` table shipped without status/version originally, so add them
-// defensively for any pre-existing database file.
+// this migration — the `outputs` table shipped without status/version/title originally, so add
+// them defensively for any pre-existing database file.
 function ensureColumn(table: string, column: string, ddl: string): void {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!cols.some((c) => c.name === column)) {
@@ -92,5 +108,6 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 }
 ensureColumn("outputs", "status", "status TEXT NOT NULL DEFAULT 'pending'");
 ensureColumn("outputs", "version", "version INTEGER NOT NULL DEFAULT 1");
+ensureColumn("outputs", "title", "title TEXT");
 
 export default db;

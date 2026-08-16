@@ -154,3 +154,83 @@ export function listOutputReviews(outputId: string): OutputReviewRow[] {
     .prepare(`SELECT * FROM output_reviews WHERE output_id = ? ORDER BY created_at ASC`)
     .all(outputId) as OutputReviewRow[];
 }
+
+export function deleteOutputRow(id: string): void {
+  db.prepare(`DELETE FROM output_reviews WHERE output_id = ?`).run(id);
+  db.prepare(`DELETE FROM outputs WHERE id = ?`).run(id);
+}
+
+export type AgentJobStatus = "running" | "done" | "needs_input" | "error";
+
+export interface AgentJobRow {
+  id: string;
+  brand_id: string;
+  team: string | null;
+  lead_agent_id: string | null;
+  current_agent_id: string;
+  status: AgentJobStatus;
+  label: string;
+  hop_count: number;
+  started_at: string;
+  updated_at: string;
+}
+
+export function createAgentJob(params: {
+  brandId: string;
+  team?: string;
+  leadAgentId?: string;
+  currentAgentId: string;
+  label?: string;
+}): string {
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO agent_jobs (id, brand_id, team, lead_agent_id, current_agent_id, label)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    params.brandId,
+    params.team ?? null,
+    params.leadAgentId ?? null,
+    params.currentAgentId,
+    params.label ?? ""
+  );
+  return id;
+}
+
+export function updateAgentJob(
+  id: string,
+  patch: { currentAgentId?: string; status?: AgentJobStatus; label?: string; hopCount?: number }
+): void {
+  const sets: string[] = ["updated_at = datetime('now')"];
+  const values: unknown[] = [];
+  if (patch.currentAgentId !== undefined) {
+    sets.push("current_agent_id = ?");
+    values.push(patch.currentAgentId);
+  }
+  if (patch.status !== undefined) {
+    sets.push("status = ?");
+    values.push(patch.status);
+  }
+  if (patch.label !== undefined) {
+    sets.push("label = ?");
+    values.push(patch.label);
+  }
+  if (patch.hopCount !== undefined) {
+    sets.push("hop_count = ?");
+    values.push(patch.hopCount);
+  }
+  values.push(id);
+  db.prepare(`UPDATE agent_jobs SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/** Running jobs, plus recently-finished ones (last 5 minutes) so a completed/blocked job doesn't
+ *  just vanish from the dashboard the instant it's done — the user can see it settled. */
+export function listRecentAgentJobs(brandId: string): AgentJobRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM agent_jobs
+       WHERE brand_id = ? AND (status = 'running' OR updated_at >= datetime('now', '-5 minutes'))
+       ORDER BY updated_at DESC`
+    )
+    .all(brandId) as AgentJobRow[];
+}

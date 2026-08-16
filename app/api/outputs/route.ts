@@ -34,6 +34,7 @@ const SaveSchema = z.object({
   content: z.string().min(1),
   deliverableType: z.string().default("general"),
   requestedBy: z.string().default("user"),
+  title: z.string().max(80).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
   const guard = await requireBrandMember(parsed.data.brandId);
   if (guard.response) return guard.response;
 
-  const { brandId, team, agentId, content, deliverableType, requestedBy } = parsed.data;
+  const { brandId, team, agentId, content, deliverableType, requestedBy, title } = parsed.data;
   const now = new Date().toISOString();
   const handoff: HandoffRecord = {
     task_id: randomUUID(),
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
     notes: "",
   };
 
-  const { relativePath, format } = await saveOutput({ brandId, team, agentId, content, handoff });
+  const { relativePath, format } = await saveOutput({ brandId, team, agentId, content, handoff, title });
   return Response.json(
     { path: relativePath, format, handoff: { ...handoff, output_path: relativePath, format } },
     { status: 201 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { BrandSwitcher } from "@/components/layout/BrandSwitcher";
+import { AgentJobsWidget } from "@/components/layout/AgentJobsWidget";
 
 interface NavItem {
   href: (brandId: string) => string;
@@ -142,6 +143,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
         </nav>
+        {brandId && <AgentJobsWidget brandId={brandId} />}
         <div className="mt-auto flex flex-col gap-0.5 pt-1 border-t border-border">
           {accountLinks}
           <button

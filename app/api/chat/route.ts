@@ -12,6 +12,7 @@ import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute
 import { AgentDef, ChatStreamEvent, HandoffRecord, MessageContentBlock, Provider, Team } from "@/lib/agents/types";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
+import { createAgentJob, updateAgentJob } from "@/lib/db/queries";
 
 // Hard cap on autonomous specialist-to-specialist handoffs within a single user turn — a
 // safety net against a classification loop, never expected to be hit in normal use.
@@ -187,6 +188,16 @@ export async function POST(req: NextRequest) {
         // reject outright. Skip straight to today's behavior (stream, done, no auto-save).
         const canAutoManage = teamSpecialists.length > 1;
 
+        // Visible on the dashboard sidebar without opening the chat — lets the user tell whether
+        // a multi-agent (or even single-agent) turn is actively progressing or stuck.
+        const jobId = createAgentJob({
+          brandId,
+          team: agent.team,
+          leadAgentId: leadAgent?.id,
+          currentAgentId: agent.id,
+          label: "עובד על הבקשה",
+        });
+
         let hop = 0;
         while (true) {
           let fullText = "";
@@ -222,12 +233,14 @@ export async function POST(req: NextRequest) {
           });
 
           if (streamError) {
+            updateAgentJob(jobId, { status: "error", label: (streamError as Error).message.slice(0, 200) });
             controller.enqueue(sseLine({ type: "error", message: (streamError as Error).message }));
             controller.close();
             return;
           }
 
           if (!canAutoManage || hop >= MAX_AUTONOMOUS_HOPS) {
+            updateAgentJob(jobId, { status: "done", label: "הסתיים" });
             controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
             controller.close();
             return;
@@ -260,6 +273,7 @@ export async function POST(req: NextRequest) {
                 agentId: agent.id,
                 content: fullText,
                 handoff,
+                title: decision.title,
               });
               controller.enqueue(
                 sseLine({ type: "output_saved", outputId: saved.id, format: saved.format, agentId: agent.id })
@@ -268,12 +282,14 @@ export async function POST(req: NextRequest) {
               // Saving is a bonus, not a requirement — if it fails for any reason, the reply
               // already streamed to the user in full, so there's nothing to roll back.
             }
+            updateAgentJob(jobId, { status: "done", label: decision.title || "תוצר נשמר" });
             controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
             controller.close();
             return;
           }
 
           if (decision.type === "needs_user_input") {
+            updateAgentJob(jobId, { status: "needs_input", label: "ממתין לתשובה מהמשתמש" });
             controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
             controller.close();
             return;
@@ -282,16 +298,22 @@ export async function POST(req: NextRequest) {
           // handoff_needed
           const nextAgent = teamSpecialists.find((s) => s.id === decision.agentId);
           if (!nextAgent) {
+            updateAgentJob(jobId, { status: "done", label: "הסתיים" });
             controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
             controller.close();
             return;
           }
+          hop++;
+          updateAgentJob(jobId, {
+            currentAgentId: nextAgent.id,
+            label: decision.brief || "המשך עבודה",
+            hopCount: hop,
+          });
           controller.enqueue(
             sseLine({ type: "handoff", from: agent.id, to: nextAgent.id, reason: decision.brief || "המשך עבודה" })
           );
           agent = applyModelOverride(nextAgent);
           routingBrief = decision.brief;
-          hop++;
         }
       } catch (error) {
         controller.enqueue(
