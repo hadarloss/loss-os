@@ -28,22 +28,43 @@ export function buildContextBlock(businessProfile: string, memoryLog: string): s
   ].join("\n");
 }
 
-export function buildAgentSystemPrompt(
-  agent: AgentDef,
-  businessProfile: string,
-  memoryLog: string,
-  routingBrief?: string
-): string {
-  const briefBlock = routingBrief?.trim()
-    ? `\n\n## דגשים מחייבים מהניתוב (מהמנהל/ת שהפנה/תה אליך)\n${routingBrief.trim()}`
-    : "";
-  return agent.systemPrompt + buildContextBlock(businessProfile, memoryLog) + briefBlock;
-}
-
 function buildRosterText(specialists: AgentDef[]): string {
   return specialists
     .map((s) => `- ${s.id} — ${s.icon} ${s.name} (${s.role}): ${s.description}`)
     .join("\n");
+}
+
+/**
+ * Who's on the agent's own team and what each of them does — the same roster a lead already
+ * sees when routing (`buildRosterText`), but injected into every specialist's own reply too, not
+ * just the lead's routing decision. Without this, a specialist has no live knowledge of its
+ * teammates unless that happened to be hand-written into its persona file, which drifts out of
+ * sync the moment the roster changes. Excludes the agent itself; the lead (if present) is listed
+ * first with an explicit "מנהל/ת הצוות" marker so a specialist knows who to defer routing to.
+ */
+function buildTeamRosterBlock(agent: AgentDef, teamRoster: AgentDef[]): string {
+  const others = teamRoster.filter((a) => a.id !== agent.id);
+  if (others.length === 0) return "";
+  const lines = others.map((a) =>
+    a.kind === "lead"
+      ? `- ${a.id} — ${a.icon} ${a.name} (מנהל/ת הצוות — ${a.role}): ${a.description}`
+      : `- ${a.id} — ${a.icon} ${a.name} (${a.role}): ${a.description}`
+  );
+  return `\n\n## הצוות שלך\nחברי/ות הצוות שאת/ה עובד/ת איתם, ומה כל אחד/ת מהם עושה — לידיעה כשמשהו חורג מהתחום שלך ושווה לציין שכדאי להעביר הלאה:\n${lines.join("\n")}`;
+}
+
+export function buildAgentSystemPrompt(
+  agent: AgentDef,
+  businessProfile: string,
+  memoryLog: string,
+  routingBrief?: string,
+  teamRoster?: AgentDef[]
+): string {
+  const briefBlock = routingBrief?.trim()
+    ? `\n\n## דגשים מחייבים מהניתוב (מהמנהל/ת שהפנה/תה אליך)\n${routingBrief.trim()}`
+    : "";
+  const rosterBlock = teamRoster?.length ? buildTeamRosterBlock(agent, teamRoster) : "";
+  return agent.systemPrompt + buildContextBlock(businessProfile, memoryLog) + rosterBlock + briefBlock;
 }
 
 /**
@@ -638,10 +659,11 @@ async function streamAgentReplyAnthropic(
   businessProfile: string,
   memoryLog: string,
   callbacks: StreamCallbacks,
-  routingBrief?: string
+  routingBrief?: string,
+  teamRoster?: AgentDef[]
 ): Promise<void> {
   const client = getAnthropicClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief, teamRoster);
 
   const stream = client.messages.stream({
     model: agent.model || DEFAULT_MODEL,
@@ -667,10 +689,11 @@ async function streamAgentReplyOpenAI(
   businessProfile: string,
   memoryLog: string,
   callbacks: StreamCallbacks,
-  routingBrief?: string
+  routingBrief?: string,
+  teamRoster?: AgentDef[]
 ): Promise<void> {
   const client = getOpenAIClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief, teamRoster);
 
   try {
     const stream = await client.responses.create({
@@ -706,10 +729,11 @@ async function streamAgentReplyOmniRoute(
   businessProfile: string,
   memoryLog: string,
   callbacks: StreamCallbacks,
-  routingBrief?: string
+  routingBrief?: string,
+  teamRoster?: AgentDef[]
 ): Promise<void> {
   const client = getOmniRouteClient();
-  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief);
+  const systemPrompt = buildAgentSystemPrompt(agent, businessProfile, memoryLog, routingBrief, teamRoster);
 
   try {
     const stream = await client.chat.completions.create({
@@ -746,15 +770,16 @@ export async function streamAgentReply(
   businessProfile: string,
   memoryLog: string,
   callbacks: StreamCallbacks,
-  routingBrief?: string
+  routingBrief?: string,
+  teamRoster?: AgentDef[]
 ): Promise<void> {
   if (agent.provider === "openai") {
-    return streamAgentReplyOpenAI(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
+    return streamAgentReplyOpenAI(agent, history, businessProfile, memoryLog, callbacks, routingBrief, teamRoster);
   }
   if (agent.provider === "omniroute") {
-    return streamAgentReplyOmniRoute(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
+    return streamAgentReplyOmniRoute(agent, history, businessProfile, memoryLog, callbacks, routingBrief, teamRoster);
   }
-  return streamAgentReplyAnthropic(agent, history, businessProfile, memoryLog, callbacks, routingBrief);
+  return streamAgentReplyAnthropic(agent, history, businessProfile, memoryLog, callbacks, routingBrief, teamRoster);
 }
 
 // --- Autonomous next-step classification (deliverable done / hand off / ask the user) ---

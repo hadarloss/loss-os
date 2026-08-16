@@ -76,6 +76,9 @@ export interface OrchestrationParams {
   originalRequestText: string;
   applyModelOverride: (a: AgentDef) => AgentDef;
   teamSpecialists: AgentDef[];
+  /** Full team roster (lead + specialists) injected into every specialist's own system prompt so
+   *  it knows who its teammates are and what each does — not just used for routing/classification. */
+  teamRoster: AgentDef[];
   canAutoManage: boolean;
   agent: AgentDef;
   routingBrief?: string;
@@ -103,6 +106,7 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
     originalRequestText,
     applyModelOverride,
     teamSpecialists,
+    teamRoster,
     canAutoManage,
   } = params;
 
@@ -139,7 +143,8 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
             resolve();
           },
         },
-        routingBrief
+        routingBrief,
+        teamRoster
       ).catch((error) => {
         streamError = error instanceof Error ? error : new Error(String(error));
         resolve();

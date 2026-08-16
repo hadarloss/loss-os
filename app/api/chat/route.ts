@@ -265,16 +265,24 @@ export async function POST(req: NextRequest) {
 
         // The autonomous handoff pool is the full specialist roster of the current agent's
         // team — already fetched above when routed through a lead, but not yet when the turn
-        // started as a direct agent chat (e.g. picked from the sidebar).
+        // started as a direct agent chat (e.g. picked from the sidebar). Same for the team's
+        // lead: known already when routed through one, but needs its own lookup for a direct
+        // agent chat so the team roster (below) is complete either way.
         let teamSpecialists = specialists;
+        let teamLead = leadAgent;
         if (teamSpecialists.length === 0 && (agent.team === "marketing" || agent.team === "branding")) {
           const tree = await getTeamTree(agent.team);
           teamSpecialists = tree.specialists;
+          teamLead = tree.lead;
         }
         // Fewer than 2 specialists (i.e. just this agent, or none) means there's no one to hand
         // off to — classification would offer an empty agent_id enum, which some providers
         // reject outright. Skip straight to today's behavior (stream, done, no auto-save).
         const canAutoManage = teamSpecialists.length > 1;
+
+        // Full roster (lead + specialists) so every specialist's own reply — not just the lead's
+        // routing decision — knows who its teammates are and what each of them does.
+        const teamRoster: AgentDef[] = teamLead ? [teamLead, ...teamSpecialists] : teamSpecialists;
 
         // Visible on the dashboard sidebar without opening the chat — lets the user tell whether
         // a multi-agent (or even single-agent) turn is actively progressing or stuck. Reuse the
@@ -303,6 +311,7 @@ export async function POST(req: NextRequest) {
           originalRequestText,
           applyModelOverride,
           teamSpecialists,
+          teamRoster,
           canAutoManage,
           agent,
           routingBrief,
