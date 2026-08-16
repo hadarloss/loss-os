@@ -10,7 +10,7 @@ description: "מנהלת צוות המיתוג. מקבלת כל בקשה הקש�
 output_types: [routing_decision]
 order: 0
 provider: openai
-model: GPT-5.6 Terra
+model: gpt-5.1
 ---
 ריי — מנהלת צוות מיתוג
 

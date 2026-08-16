@@ -68,12 +68,12 @@ provider: anthropic     # anthropic (ברירת מחדל) | openai | omniroute �
 model: claude-haiku-4-5-20251001   # מזהה המודל אצל אותו provider; ניתן לדריסה לכל סוכן
 ```
 
-**בחירת מודל לפי תפקיד**: כל 37 הסוכנים המומחים (ספציאליסטים + ערן/QA + אוריתה/onboarding) על `provider: anthropic, model: claude-haiku-4-5-20251001` — המודל הזול ביותר בקטלוג Claude, ברירת המחדל ההיסטורית של המערכת לכתיבה. שני מנהלי הצוות (גיא, ריי) והמסווג הפנימי `classifyNextStep` (`lib/agents/router.ts`) — שלושת הרכיבים היחידים במערכת שמחליטים בפועל handoff (למי לנתב / האם להעביר לסוכן הבא) — על `provider: openai, model: GPT-5.6 Terra`: מודל גדול יותר עם זיכרון/הקשר מורחב, במכוון לא הזול ביותר, כי טעויות סיווג handoff הן בדיוק מה שגורם לתוצרים "ללכת לאיבוד" (ראו גם "תוצרים" למטה). כל סוכן OpenAI עתידי שלא אחראי על handoff אמור לרדת ל-`GPT-5.6 Luna` (הזול, `DEFAULT_OPENAI_MODEL`) — לא ל-Terra.
+**בחירת מודל לפי תפקיד**: כל 37 הסוכנים המומחים (ספציאליסטים + ערן/QA + אוריתה/onboarding) על `provider: anthropic, model: claude-haiku-4-5-20251001` — המודל הזול ביותר בקטלוג Claude, ברירת המחדל ההיסטורית של המערכת לכתיבה. שני מנהלי הצוות (גיא, ריי) והמסווג הפנימי `classifyNextStep` (`lib/agents/router.ts`) — שלושת הרכיבים היחידים במערכת שמחליטים בפועל handoff (למי לנתב / האם להעביר לסוכן הבא) — על `provider: openai, model: gpt-5.1`: המודל המלא, במכוון לא הזול ביותר (`gpt-5.1-mini`), כי טעויות סיווג handoff הן בדיוק מה שגורם לתוצרים "ללכת לאיבוד" (ראו גם "תוצרים" למטה). כל סוכן OpenAI עתידי שלא אחראי על handoff אמור לרדת ל-`gpt-5.1-mini` (הזול, `DEFAULT_OPENAI_MODEL`) — לא ל-`gpt-5.1` המלא.
 
 ## שני ספקי מודל (Anthropic + OpenAI)
 כל סוכן בוחר ספק דרך שדה `provider` בפרונטמאטר (`anthropic` בברירת מחדל או `openai`). `lib/agents/router.ts` מנתב כל קריאה — גם ניתוב ההיררכיה (`routeToAgent`) וגם תשובת המומחה בסטרימינג (`streamAgentReply`) — לפי `provider` של הסוכן הרלוונטי:
 - `provider: anthropic` (ברירת מחדל, וכיום כל 37 הסוכנים המומחים) → `lib/anthropic/client.ts`, Messages API, `model` הוא מזהה Claude (`claude-haiku-4-5-20251001` הזול ביותר).
-- `provider: openai` (שני מנהלי הצוות + המסווג הפנימי) → `lib/openai/client.ts`, Responses API (`client.responses.create`), `model` הוא `GPT-5.6 Luna` (זול, ברירת מחדל) או `GPT-5.6 Terra` (גדול, לרכיבי handoff).
+- `provider: openai` (שני מנהלי הצוות + המסווג הפנימי) → `lib/openai/client.ts`, Responses API (`client.responses.create`), `model` הוא `gpt-5.1-mini` (זול, ברירת מחדל) או `gpt-5.1` המלא (לרכיבי handoff).
 
 **כדי "לפרוס מחדש" סוכן על ספק אחר**: לשנות בקובץ ה-`skills/*.md` שלו את `provider` ואת `model` יחד למזהה המתאים לספק החדש — אין ברירת מחדל בין ספקים למודל. אין צורך בשינוי קוד נוסף.
 
@@ -111,7 +111,7 @@ deliverable_type, output_path, requested_by, created_at, updated_at, notes
 | שמירת תוצר (`saveOutput`) בסיום משימה/deliverable | אוטומטית, ברגע שהקלאסיפייר קבע `task_complete`/`deliverable_complete` | לא לשמירה עצמה; כן ל"אישור" הסטטוס בעמוד תוצרים |
 | אישור/דחיית תוצר בעמוד "תוצרים" | המשתמש בלבד | — זו הפעולה שדורשת אישור; אישור כותב רשומת זיכרון, דחייה מוחקת |
 | תשובה לשאלת הבהרה (`needs_user_input`) | — | תמיד המשתמש; ההודעה הבאה שלו ממשיכה אותה משימה/job (לא פותחת אחד חדש) |
-| handoff אוטומטי בין סוכנים | אוטומטית, כברירת מחדל (הקלאסיפייר עצמו תמיד רץ על OpenAI `GPT-5.6 Terra`, ללא קשר לספק של הסוכן שענה — ראו "בחירת מודל לפי תפקיד" למעלה) | לא, אלא אם הוגדר `auto_handoff_enabled: false` בפרונטמאטר של אותו סוכן |
+| handoff אוטומטי בין סוכנים | אוטומטית, כברירת מחדל (הקלאסיפייר עצמו תמיד רץ על OpenAI `gpt-5.1`, ללא קשר לספק של הסוכן שענה — ראו "בחירת מודל לפי תפקיד" למעלה) | לא, אלא אם הוגדר `auto_handoff_enabled: false` בפרונטמאטר של אותו סוכן |
 
 **דגל פר-סוכן**: `auto_handoff_enabled: false` בפרונטמאטר (`skills/*.md`) מכבה handoff/auto-save אוטומטי לאותו סוכן ספציפית — כל תגובה שלו נופלת ל-`needs_user_input`, גם בתוך תוכנית מאושרת. ברירת המחדל `true` לכל 39 הסוכנים.
 

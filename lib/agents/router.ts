@@ -769,9 +769,9 @@ export type NextStepDecision =
 const NEXT_STEP_TOOL_NAME = "decide_next_step";
 // This classifier is the one component whose entire job is to decide handoff (handoff_needed
 // vs. deliverable_complete vs. needs_user_input) — per the "give handoff managers the bigger
-// model" policy it runs on GPT-5.6 Terra (not the cheap Luna default), independent of whichever
-// provider the specialist that just replied happens to use.
-const NEXT_STEP_CLASSIFIER_MODEL = "GPT-5.6 Terra";
+// model" policy it runs on the full gpt-5.1 (not the cheaper gpt-5.1-mini default), independent
+// of whichever provider the specialist that just replied happens to use.
+const NEXT_STEP_CLASSIFIER_MODEL = "gpt-5.1";
 
 const NEXT_STEP_SYSTEM_PROMPT = [
   "את/ה מסווג/ת החלטות פנימי בצוות AI שיווקי/מיתוגי — לא פונה למשתמש ישירות.",
@@ -876,11 +876,11 @@ interface TaskCompletionToolInput {
  * unparseable response falls back to `needs_user_input`, i.e. today's behavior (show the reply,
  * do nothing automatic) — a classification hiccup should never silently drop or misroute work.
  *
- * The classification call itself always goes through OpenAI's `GPT-5.6 Terra` (`NEXT_STEP_CLASSIFIER_MODEL`)
+ * The classification call itself always goes through OpenAI's `gpt-5.1` (`NEXT_STEP_CLASSIFIER_MODEL`)
  * regardless of which provider actually generated `replyText` — this is a small, separate
- * judgment call, not a re-run of the replying agent. It runs on the bigger/higher-memory Terra
- * tier rather than the cheap Luna default, deliberately: this classifier is the one component
- * whose entire job is deciding handoff, and a misclassification here is exactly what causes
+ * judgment call, not a re-run of the replying agent. It deliberately runs on the full model
+ * rather than the cheaper `gpt-5.1-mini` default: this classifier is the one component whose
+ * entire job is deciding handoff, and a misclassification here is exactly what causes
  * deliverables to silently go missing. It works the same for every agent provider (anthropic or
  * openai) with no added per-turn cost on the replying agent's own provider; an agent only skips
  * it via `auto_handoff_enabled: false` in its frontmatter, not based on which provider it's on.
