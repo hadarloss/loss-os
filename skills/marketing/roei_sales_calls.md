@@ -9,8 +9,8 @@ icon: "☎️"
 description: "בונה תסריטי שיחה ומענה להתנגדויות עבור שיחות מכירה טלפוניות/פרונטליות."
 output_types: [sales_script]
 order: 10
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # רועי — תסריטי שיחות מכירה

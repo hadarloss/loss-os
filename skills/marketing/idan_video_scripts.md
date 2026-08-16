@@ -9,8 +9,8 @@ icon: "🎬"
 description: "כותב תסריטים קצרים לוידאו — Reels/TikTok/YouTube Shorts — עם דגש על שניות פתיחה ומבנה ויזואלי."
 output_types: [video_script]
 order: 6
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # עידן — תסריטי וידאו

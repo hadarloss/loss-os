@@ -23,5 +23,5 @@ export function getAnthropicClient(): Anthropic {
   return client;
 }
 
-export const DEFAULT_MODEL = "claude-sonnet-5";
+export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export const MAX_TOKENS = 4096;

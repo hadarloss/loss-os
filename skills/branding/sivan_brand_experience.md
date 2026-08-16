@@ -9,8 +9,8 @@ icon: "✨"
 description: "מתכננת את המותג בנקודות מגע פיזיות/חוויתיות (אריזה, שירות, מרחב) — לא רק תקשורת, אלא חוויה מלאה."
 output_types: [brand_experience_brief]
 order: 16
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # סיון — חוויית מותג

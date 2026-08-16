@@ -9,8 +9,8 @@ icon: "🔍"
 description: "בונה פרופילי קהל יעד ופרסונות קונה מבוססות על תיק העסק — צרכים, כאבים, שפה ומניעים."
 output_types: [audience_research, persona_doc]
 order: 1
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # אבי — מחקר קהל יעד ופרסונות

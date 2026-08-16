@@ -9,8 +9,8 @@ icon: "🎨"
 description: "מגדירה את ערכת המותג הבסיסית — פלטת צבעים, שימושי לוגו, ועקרונות ליבה ויזואליים ניתנים ליישום."
 output_types: [brand_kit]
 order: 7
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # נטע — ערכת מותג

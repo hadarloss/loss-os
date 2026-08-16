@@ -9,8 +9,8 @@ icon: "🏷️"
 description: "מייצר ובודק שמות למותג, מוצרים, קווי מוצר או קמפיינים — עם בדיקת התאמה לאסטרטגיה ולזמינות בסיסית."
 output_types: [naming_options]
 order: 9
-provider: omniroute
-model: archetype-c-strategic-foundational
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # ניב — נאמינג

@@ -767,17 +767,18 @@ export type NextStepDecision =
   | { type: "task_needs_revision"; note: string };
 
 const NEXT_STEP_TOOL_NAME = "decide_next_step";
-// Pinned model id, not the "-latest" alias — OmniRoute intermittently fails to resolve alias
-// names ("unknown provider for model gemini-flash-latest") even though the underlying model is
-// healthy; a concrete id like this one has tested reliably across dozens of repeated calls.
-const NEXT_STEP_CLASSIFIER_MODEL = "gemini/gemini-3.1-flash-lite";
+// This classifier is the one component whose entire job is to decide handoff (handoff_needed
+// vs. deliverable_complete vs. needs_user_input) — per the "give handoff managers the bigger
+// model" policy it runs on GPT-5.6 Terra (not the cheap Luna default), independent of whichever
+// provider the specialist that just replied happens to use.
+const NEXT_STEP_CLASSIFIER_MODEL = "GPT-5.6 Terra";
 
 const NEXT_STEP_SYSTEM_PROMPT = [
   "את/ה מסווג/ת החלטות פנימי בצוות AI שיווקי/מיתוגי — לא פונה למשתמש ישירות.",
   "תפקידך היחיד: לקרוא את התגובה האחרונה של סוכן, ולהחליט מה השלב הבא בתהליך.",
   "",
   "שלוש אפשרויות בלבד:",
-  "- deliverable_complete — הסוכן מסר חומר קצה שימושי בפועל: קופי סופי, רעיון קריאייטיב מגובש, גאנט/לוח זמנים, בריף מלא, טקסט/מלל מוכן לפרסום, המלצה אסטרטגית מגובשת וכו'. זה תמיד תוכן ממשי שאפשר להשתמש בו כמו שהוא.",
+  "- deliverable_complete — הסוכן מסר חומר קצה מוכן לשימוש בפועל על ידי הצוות. דוגמאות מובהקות: גאנט/לוח תוכן, בריף למשפיען/ית, תסריט וידאו, מאמר בלוג עם מילות מפתח SEO לאישור, דוח סופי, קופי סופי, רעיון קריאייטיב מגובש, טקסט/מלל מוכן לפרסום, המלצה אסטרטגית מגובשת. זה תמיד תוכן ממשי שאפשר להשתמש בו כמו שהוא — גם אם הוא עדיין ממתין לאישור המשתמש, כל עוד מדובר בחומר קצה בפועל ולא רק בתיאור/תוכנית מה ייווצר.",
   "- handoff_needed — הבקשה המקורית עדיין לא הושלמה במלואה, וסוכן/ית אחר/ת בצוות צריכ/ה להמשיך את העבודה (למשל: תוכן נכתב אבל צריך עכשיו בדיקת עקביות מיתוגית). ציינו agent_id מדויק מתוך הרשימה, ו-brief קצר עם מה שהסוכן הבא חייב לדעת.",
   '- needs_user_input — כל מה שאינו תוצר קצה בפועל: שאלת חידוד, בקשת אישור/הרשאה להמשיך (למשל "האם להפעיל את הצוות על זה?", "לאשר שאני ממשיך?"), עדכון סטטוס על תהליך, או כל תגובה שהיא על *התהליך* ולא *התוצר עצמו*. גם אם הסוכן "סיים לדבר" — אם מה שהוא אמר אינו חומר קצה שימושי, זו needs_user_input, לא deliverable_complete.',
   "",
@@ -875,12 +876,14 @@ interface TaskCompletionToolInput {
  * unparseable response falls back to `needs_user_input`, i.e. today's behavior (show the reply,
  * do nothing automatic) — a classification hiccup should never silently drop or misroute work.
  *
- * The classification call itself always goes through OmniRoute's cheap, fixed classifier model
- * (`NEXT_STEP_CLASSIFIER_MODEL`) regardless of which provider actually generated `replyText` —
- * this is a small, separate judgment call, not a re-run of the replying agent. That means it
- * works the same for every agent provider (anthropic/openai/omniroute) with no added per-turn
- * cost on paid providers; an agent only skips it via `auto_handoff_enabled: false` in its
- * frontmatter, not based on which provider it's on.
+ * The classification call itself always goes through OpenAI's `GPT-5.6 Terra` (`NEXT_STEP_CLASSIFIER_MODEL`)
+ * regardless of which provider actually generated `replyText` — this is a small, separate
+ * judgment call, not a re-run of the replying agent. It runs on the bigger/higher-memory Terra
+ * tier rather than the cheap Luna default, deliberately: this classifier is the one component
+ * whose entire job is deciding handoff, and a misclassification here is exactly what causes
+ * deliverables to silently go missing. It works the same for every agent provider (anthropic or
+ * openai) with no added per-turn cost on the replying agent's own provider; an agent only skips
+ * it via `auto_handoff_enabled: false` in its frontmatter, not based on which provider it's on.
  *
  * When `activeTask` is passed (executing an approved plan), which agent runs next is already
  * fixed by the plan's task graph — this call narrows to a single question: did this task's own
@@ -916,38 +919,37 @@ export async function classifyNextStep(
   const specialistIds = others.map((s) => s.id);
 
   try {
-    const client = getOmniRouteClient();
+    const client = getOpenAIClient();
 
     if (activeTask) {
-      const response = await client.chat.completions.create({
+      const response = await client.responses.create({
         model: NEXT_STEP_CLASSIFIER_MODEL,
-        messages: [
-          { role: "system", content: buildTaskCompletionSystemPrompt(activeTask) },
+        instructions: buildTaskCompletionSystemPrompt(activeTask),
+        input: [
           {
             role: "user",
             content: `הבקשה המקורית מהמשתמש:\n${originalRequest.slice(0, 1000)}\n\nהתגובה של ${agent.name} (${agent.id}):\n${replyText.slice(0, 3000)}`,
           },
         ],
-        max_tokens: 512,
+        max_output_tokens: 512,
         tools: [
           {
             type: "function",
-            function: {
-              name: NEXT_STEP_TOOL_NAME,
-              description: "קבע/י האם המשימה שהוקצתה הושלמה",
-              parameters: buildTaskCompletionToolSchema(),
-            },
+            name: NEXT_STEP_TOOL_NAME,
+            description: "קבע/י האם המשימה שהוקצתה הושלמה",
+            parameters: buildTaskCompletionToolSchema(),
+            strict: false,
           },
         ],
-        tool_choice: { type: "function", function: { name: NEXT_STEP_TOOL_NAME } },
+        tool_choice: { type: "function", name: NEXT_STEP_TOOL_NAME },
       });
 
-      const call = response.choices[0]?.message.tool_calls?.find(
-        (tc): tc is OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall => tc.type === "function"
+      const call = response.output.find(
+        (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
       );
       if (!call) return { type: "needs_user_input" };
 
-      const input = JSON.parse(call.function.arguments) as TaskCompletionToolInput;
+      const input = JSON.parse(call.arguments) as TaskCompletionToolInput;
       if (input.decision === "task_complete") return { type: "task_complete" };
       if (input.decision === "task_needs_revision") {
         return { type: "task_needs_revision", note: input.note?.trim() ?? "" };
@@ -955,41 +957,37 @@ export async function classifyNextStep(
       return { type: "needs_user_input" };
     }
 
-    const response = await client.chat.completions.create({
+    const response = await client.responses.create({
       model: NEXT_STEP_CLASSIFIER_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            NEXT_STEP_SYSTEM_PROMPT +
-            "\n\n## חברי צוות זמינים להעברת עבודה (handoff_needed בלבד)\n" +
-            buildRosterText(others),
-        },
+      instructions:
+        NEXT_STEP_SYSTEM_PROMPT +
+        "\n\n## חברי צוות זמינים להעברת עבודה (handoff_needed בלבד)\n" +
+        buildRosterText(others),
+      input: [
         {
           role: "user",
           content: `הבקשה המקורית מהמשתמש:\n${originalRequest.slice(0, 1000)}\n\nהתגובה של ${agent.name} (${agent.id}):\n${replyText.slice(0, 3000)}`,
         },
       ],
-      max_tokens: 1024,
+      max_output_tokens: 1024,
       tools: [
         {
           type: "function",
-          function: {
-            name: NEXT_STEP_TOOL_NAME,
-            description: "קבע/י את השלב הבא בתהליך",
-            parameters: buildNextStepToolSchema(specialistIds),
-          },
+          name: NEXT_STEP_TOOL_NAME,
+          description: "קבע/י את השלב הבא בתהליך",
+          parameters: buildNextStepToolSchema(specialistIds),
+          strict: false,
         },
       ],
-      tool_choice: { type: "function", function: { name: NEXT_STEP_TOOL_NAME } },
+      tool_choice: { type: "function", name: NEXT_STEP_TOOL_NAME },
     });
 
-    const call = response.choices[0]?.message.tool_calls?.find(
-      (tc): tc is OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall => tc.type === "function"
+    const call = response.output.find(
+      (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
     );
     if (!call) return { type: "needs_user_input" };
 
-    const input = JSON.parse(call.function.arguments) as NextStepToolInput;
+    const input = JSON.parse(call.arguments) as NextStepToolInput;
 
     if (input.decision === "handoff_needed" && input.agent_id && specialistIds.includes(input.agent_id)) {
       return { type: "handoff_needed", agentId: input.agent_id, brief: input.brief?.trim() ?? "" };

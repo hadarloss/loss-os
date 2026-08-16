@@ -29,12 +29,14 @@ interface PersistDeliverableParams {
   title: string;
 }
 
-/** Saving is a bonus, not a requirement — if it fails for any reason, the reply already
- *  streamed to the user in full, so there's nothing to roll back; callers just skip the
- *  output_saved event. */
-async function persistDeliverable(
-  params: PersistDeliverableParams
-): Promise<{ id: string; format: string } | null> {
+type PersistDeliverableResult =
+  | { ok: true; id: string; format: string }
+  | { ok: false; error: string };
+
+/** The reply already streamed to the user in full, so a failed save never rolls anything back —
+ *  but silently dropping it means a real deliverable never makes it to the outputs page with no
+ *  trace. Callers surface `ok: false` to the user instead of just skipping the output_saved event. */
+async function persistDeliverable(params: PersistDeliverableParams): Promise<PersistDeliverableResult> {
   const now = new Date().toISOString();
   const handoff: HandoffRecord = {
     task_id: randomUUID(),
@@ -49,7 +51,7 @@ async function persistDeliverable(
     notes: "",
   };
   try {
-    return await saveOutput({
+    const saved = await saveOutput({
       brandId: params.brandId,
       team: params.team,
       agentId: params.agentId,
@@ -57,8 +59,9 @@ async function persistDeliverable(
       handoff,
       title: params.title,
     });
-  } catch {
-    return null;
+    return { ok: true, id: saved.id, format: saved.format };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -150,11 +153,26 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
       return;
     }
 
-    if (!canAutoManage || hop >= MAX_AUTONOMOUS_HOPS) {
-      updateAgentJob(jobId, {
-        status: activeTask ? "needs_input" : "done",
-        label: activeTask ? "הגיע למגבלת הצעדים האוטונומיים" : "הסתיים",
-      });
+    if (!canAutoManage) {
+      updateAgentJob(jobId, { status: "done", label: "הסתיים" });
+      controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
+      controller.close();
+      return;
+    }
+
+    if (hop >= MAX_AUTONOMOUS_HOPS) {
+      // The autonomous loop ran out of steps without ever resolving to a finished deliverable —
+      // the last reply is still shown to the user (already streamed above), but nothing was
+      // auto-saved. Surface that explicitly instead of just closing quietly, so the user knows
+      // to save/ask manually rather than assuming the work is sitting in the outputs page.
+      updateAgentJob(jobId, { status: "needs_input", label: "הגיע למגבלת הצעדים האוטונומיים" });
+      controller.enqueue(
+        sseLine({
+          type: "error",
+          message:
+            "התהליך האוטומטי בין הסוכנים הגיע למגבלת הצעדים בלי לזהות תוצר סופי — התגובה האחרונה מוצגת למעלה, אך היא לא נשמרה אוטומטית כתוצר.",
+        })
+      );
       controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
       controller.close();
       return;
@@ -175,12 +193,19 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
           deliverableType: activeTask.deliverableType,
           title: activeTask.title,
         });
-        if (saved) {
+        if (saved.ok) {
           controller.enqueue(
             sseLine({ type: "output_saved", outputId: saved.id, format: saved.format, agentId: agent.id })
           );
+        } else {
+          controller.enqueue(
+            sseLine({
+              type: "error",
+              message: `התגובה מוכנה, אך שמירתה כתוצר בעמוד התוצרים נכשלה: ${saved.error}`,
+            })
+          );
         }
-        updatePlanTaskStatus(activeTask.id, "done", saved?.id ?? undefined);
+        updatePlanTaskStatus(activeTask.id, "done", saved.ok ? saved.id : undefined);
         controller.enqueue(
           sseLine({ type: "plan_task_update", planId: planId!, taskId: activeTask.id, status: "done", agentId: agent.id })
         );
@@ -256,9 +281,16 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
         deliverableType: decision.deliverableType,
         title: decision.title,
       });
-      if (saved) {
+      if (saved.ok) {
         controller.enqueue(
           sseLine({ type: "output_saved", outputId: saved.id, format: saved.format, agentId: agent.id })
+        );
+      } else {
+        controller.enqueue(
+          sseLine({
+            type: "error",
+            message: `התגובה מוכנה, אך שמירתה כתוצר בעמוד התוצרים נכשלה: ${saved.error}`,
+          })
         );
       }
       updateAgentJob(jobId, { status: "done", label: decision.title || "תוצר נשמר" });

@@ -9,8 +9,8 @@ icon: "🎨"
 description: "מנהלת צוות המיתוג. מקבלת כל בקשה הקשורה לזהות/מותג, ומנתבת אותה לסוכן המומחה המתאים בצוות."
 output_types: [routing_decision]
 order: 0
-provider: omniroute
-model: gemini/gemini-3.1-flash-lite
+provider: openai
+model: GPT-5.6 Terra
 ---
 ריי — מנהלת צוות מיתוג
 

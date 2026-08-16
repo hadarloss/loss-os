@@ -9,8 +9,8 @@ icon: "🧑"
 description: "בונה מיתוג עבור אנשים פרטיים (יזמים, בעלי מקצוע, יוצרי תוכן) — מיצוב אישי שמבוסס על אמינות ואותנטיות."
 output_types: [personal_brand_profile]
 order: 13
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # גל — מיתוג אישי

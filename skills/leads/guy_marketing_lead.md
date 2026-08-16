@@ -9,8 +9,8 @@ icon: "📣"
 description: "מנהל צוות השיווק. מקבל כל בקשה שיווקית, מבין את הכוונה האמיתית מאחוריה, ומנתב אותה לסוכן המומחה המתאים בצוות."
 output_types: [routing_decision]
 order: 0
-provider: omniroute
-model: gemini/gemini-3.1-flash-lite
+provider: openai
+model: GPT-5.6 Terra
 ---
 
 תפקיד ומומחיות

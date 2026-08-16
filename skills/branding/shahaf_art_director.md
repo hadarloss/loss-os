@@ -9,8 +9,8 @@ icon: "🖌️"
 description: "מגדיר/ת כיוון חזותי כללי למותג — סגנון, מצב רוח ויזואלי, והנחיות לצילום/עיצוב, ברמת קונספט."
 output_types: [art_direction_brief]
 order: 6
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # שחף — ארט דיירקשן

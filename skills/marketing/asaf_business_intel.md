@@ -9,8 +9,8 @@ icon: "📊"
 description: "מנתח מתחרים, מגמות שוק ומיצוב תחרותי כדי לתת לצוות השיווק הקשר אסטרטגי לפני שהם יוצרים תוכן."
 output_types: [competitive_analysis, market_brief]
 order: 4
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # אסף — בינת עסקים ותחרות

@@ -9,8 +9,8 @@ icon: "🎯"
 description: "כותבת קריאייטיב וטקסטים למודעות ממומנות (Google Ads / Meta Ads) — כותרות, טקסטים, וריאציות לבדיקה."
 output_types: [ppc_ad_set]
 order: 13
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # כרמל — פרסום ממומן (PPC)

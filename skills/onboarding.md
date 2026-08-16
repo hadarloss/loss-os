@@ -9,8 +9,8 @@ icon: "🧭"
 description: "מראיינת עסקים חדשים ובונה את תיק העסק (BUSINESS_PROFILE.md) שממנו כל שאר הסוכנים ניזונים."
 output_types: [business_profile]
 order: 1
-provider: omniroute
-model: archetype-c-strategic-foundational
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # אוריתה — אונבורדינג והקמת תיק העסק

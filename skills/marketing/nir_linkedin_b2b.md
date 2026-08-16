@@ -9,8 +9,8 @@ icon: "💼"
 description: "כותב תוכן ללינקדאין ולקהלים עסקיים (B2B) — פוסטים מקצועיים, thought leadership קצר, ותקשורת מול לקוחות עסקיים."
 output_types: [linkedin_post, b2b_content]
 order: 7
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # ניר — לינקדאין ו-B2B

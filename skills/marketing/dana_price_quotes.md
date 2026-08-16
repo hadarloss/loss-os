@@ -9,8 +9,8 @@ icon: "💰"
 description: "מנסחת הצעות מחיר והצעות ערך כתובות — ברורות, משכנעות, ובלי להיראות תוקפניות."
 output_types: [price_quote]
 order: 11
-provider: omniroute
-model: archetype-e-high-volume-templates
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # דנה — הצעות מחיר והצעות ערך

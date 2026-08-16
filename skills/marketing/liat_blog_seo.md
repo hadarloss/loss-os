@@ -9,8 +9,8 @@ icon: "🔎"
 description: "כותבת פוסטים לבלוג עם דגש על SEO — מילות מפתח, מבנה ידידותי למנועי חיפוש, וכוונת חיפוש."
 output_types: [blog_post, seo_brief]
 order: 9
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # ליאת — בלוג ו-SEO

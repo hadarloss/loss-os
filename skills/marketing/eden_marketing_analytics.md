@@ -9,8 +9,8 @@ icon: "📈"
 description: "מנתחת ביצועי קמפיינים ומדדים, ומתרגמת נתונים לתובנות והמלצות פעולה ברורות לשאר הצוות."
 output_types: [analytics_report]
 order: 17
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # עדן — אנליטיקס ודוחות ביצועים

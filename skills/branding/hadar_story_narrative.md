@@ -9,8 +9,8 @@ icon: "📖"
 description: "בונה את סיפור המותג — מקור, מסע ונרטיב מרכזי — שמחבר רגשית בין המותג לקהל שלו."
 output_types: [brand_story]
 order: 3
-provider: omniroute
-model: archetype-c-strategic-foundational
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # הדר — סיפור מותג ונרטיב

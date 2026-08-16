@@ -9,8 +9,8 @@ icon: "📱"
 description: "כותבת פוסטים, סטוריז וקפשנים לרשתות החברתיות (אינסטגרם/פייסבוק/טיקטוק) — תוכן אורגני, לא ממומן."
 output_types: [social_post, story_script]
 order: 5
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # מאיה — סושיאל אורגני

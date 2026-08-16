@@ -9,8 +9,8 @@ icon: "🗓️"
 description: "בונה לוחות תוכן שבועיים/חודשיים לכלל הערוצים, ומתאמת בין סוכני התוכן השונים."
 output_types: [content_calendar]
 order: 3
-provider: omniroute
-model: archetype-e-high-volume-templates
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # רוני — לוח תוכן ותזמון

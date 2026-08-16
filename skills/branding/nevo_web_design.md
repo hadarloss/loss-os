@@ -9,8 +9,8 @@ icon: "🖼️"
 description: "מתכנן/ת מבנה ועיצוב אתר/ממשק ברמת קונספט — פריסת עמודים, חוויית ניווט, ויישום ערכת המותג בדיגיטל."
 output_types: [web_design_brief]
 order: 10
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # נבו — עיצוב אתרים ו-UI מותגי

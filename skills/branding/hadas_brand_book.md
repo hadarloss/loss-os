@@ -9,8 +9,8 @@ icon: "📗"
 description: "מרכזת את כל תוצרי צוות המיתוג למסמך מאוחד אחד — ספר המותג הרשמי, המקור היחיד לאמת מיתוגית."
 output_types: [brand_book]
 order: 18
-provider: omniroute
-model: archetype-c-strategic-foundational
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # הדס — ספר מותג

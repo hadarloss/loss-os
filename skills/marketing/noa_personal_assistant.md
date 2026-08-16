@@ -9,8 +9,8 @@ icon: "🗂️"
 description: "מסייעת בארגון, סיכום ותיאום משימות שיווק — סיכומי שיחה, רשימות מטלות, ותזכורות למעקב."
 output_types: [task_summary, brief]
 order: 16
-provider: omniroute
-model: archetype-e-high-volume-templates
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # נועה — עוזרת אישית לשיווק

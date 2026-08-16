@@ -9,8 +9,8 @@ icon: "📰"
 description: "כותב מאמרים ארוכים, מדריכים ותוכן thought-leadership מעמיק שבונה סמכות מקצועית לאורך זמן."
 output_types: [long_article]
 order: 8
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # ג'ונתן — מאמרים ארוכים

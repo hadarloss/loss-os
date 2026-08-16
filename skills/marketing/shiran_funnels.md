@@ -9,8 +9,8 @@ icon: "🛒"
 description: "מתכננת משפכי מכירה מקצה לקצה — מהחשיפה הראשונה ועד ההמרה, כולל שלבי רימרקטינג."
 output_types: [funnel_plan]
 order: 2
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # שירן — אסטרטגיית משפכי מכירה

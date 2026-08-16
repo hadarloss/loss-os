@@ -9,8 +9,8 @@ icon: "🔤"
 description: "בוחרת ומגדירה מערכת טיפוגרפית למותג — גופנים, היררכיה, ושימוש נכון בעברית ובאנגלית."
 output_types: [typography_system]
 order: 8
-provider: omniroute
-model: archetype-d-ongoing-content
+provider: anthropic
+model: claude-haiku-4-5-20251001
 ---
 
 # ענבל — טיפוגרפיה
