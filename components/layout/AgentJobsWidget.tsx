@@ -6,7 +6,7 @@ import useSWR from "swr";
 interface AgentJob {
   id: string;
   current_agent_id: string;
-  status: "running" | "done" | "needs_input" | "error";
+  status: "running" | "done" | "needs_input" | "error" | "plan_pending_approval";
   label: string;
   hop_count: number;
   started_at: string;
@@ -26,6 +26,7 @@ const STATUS_DOT: Record<AgentJob["status"], string> = {
   done: "bg-green-500",
   needs_input: "bg-blue-500",
   error: "bg-destructive",
+  plan_pending_approval: "bg-purple-500 animate-pulse",
 };
 
 function elapsedLabel(startedAt: string): string {
@@ -69,7 +70,7 @@ export function AgentJobsWidget({ brandId }: { brandId: string }) {
       {jobs.map((job) => {
         const agent = agentsById[job.current_agent_id];
         return (
-          <div key={job.id} className="flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[11px]">
+          <div key={job.id} className="flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[11px]" title={job.label}>
             <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${STATUS_DOT[job.status]}`} aria-hidden />
             <span className="shrink-0" aria-hidden>
               {agent?.icon ?? "🤖"}

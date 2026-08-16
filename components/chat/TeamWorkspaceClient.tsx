@@ -27,6 +27,9 @@ export function TeamWorkspaceClient({
     activeAgentId,
     modelOverride,
     setModelOverride,
+    plan,
+    approvePlan,
+    cancelPlan,
   } = useAgentChat({ brandId, team });
   const agentsById = buildAgentsById([lead, ...specialists]);
   const defaultModel = agentsById[activeAgentId ?? lead.id]?.model ?? lead.model;
@@ -42,6 +45,9 @@ export function TeamWorkspaceClient({
       agentsById={agentsById}
       placeholder={`כתבו הודעה ל${lead.name}...`}
       saveContext={{ brandId, team }}
+      plan={plan}
+      onApprovePlan={approvePlan}
+      onCancelPlan={cancelPlan}
       modelSelector={
         lead.provider === "omniroute"
           ? {

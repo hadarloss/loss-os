@@ -165,6 +165,13 @@ export async function deleteOutput(brandId: string, id: string): Promise<boolean
   return true;
 }
 
+export async function getOutputSummary(brandId: string, id: string): Promise<OutputSummary | null> {
+  const row = db
+    .prepare(`SELECT * FROM outputs WHERE brand_id = ? AND id = ?`)
+    .get(brandId, id) as OutputRow | undefined;
+  return row ? rowToSummary(row) : null;
+}
+
 export async function listOutputs(brandId: string, team?: Team): Promise<OutputSummary[]> {
   const rows = team
     ? (db

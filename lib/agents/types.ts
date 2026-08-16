@@ -23,6 +23,10 @@ export const AgentFrontmatterSchema = z.object({
   /** Which API this agent's `model` id belongs to. Defaults to anthropic for backward compatibility. */
   provider: ProviderSchema.default("anthropic"),
   model: z.string().default("claude-sonnet-5"),
+  /** Whether this agent's replies may trigger autonomous handoff/auto-save (classifyNextStep).
+   *  Defaults to true for all providers; set false to force every one of this agent's turns to
+   *  stop and wait for the user instead. */
+  auto_handoff_enabled: z.boolean().default(true),
 });
 
 export type AgentFrontmatter = z.infer<typeof AgentFrontmatterSchema>;
@@ -53,6 +57,64 @@ export interface HandoffRecord {
   created_at: string;
   updated_at: string;
   notes: string;
+}
+
+export const PlanStatusSchema = z.enum([
+  "pending_approval",
+  "approved",
+  "running",
+  "done",
+  "cancelled",
+]);
+export type PlanStatus = z.infer<typeof PlanStatusSchema>;
+
+export const PlanTaskStatusSchema = z.enum([
+  "pending",
+  "ready",
+  "in_progress",
+  "done",
+  "skipped",
+  "failed",
+]);
+export type PlanTaskStatus = z.infer<typeof PlanTaskStatusSchema>;
+
+export interface PlanTask {
+  id: string;
+  planId: string;
+  sequence: number;
+  agentId: string;
+  deliverableType: string;
+  title: string;
+  brief: string;
+  dependsOn: string[];
+  status: PlanTaskStatus;
+  outputId: string | null;
+}
+
+export interface Plan {
+  id: string;
+  brandId: string;
+  jobId: string | null;
+  team: string | null;
+  leadAgentId: string | null;
+  goal: string;
+  status: PlanStatus;
+  tasks: PlanTask[];
+}
+
+/** The lead proposed a multi-agent plan — execution is held until the user approves it. */
+export interface PlanProposedEvent {
+  type: "plan_proposed";
+  plan: Plan;
+}
+
+/** A single task within an already-approved plan changed status during execution. */
+export interface PlanTaskUpdateEvent {
+  type: "plan_task_update";
+  planId: string;
+  taskId: string;
+  status: PlanTaskStatus;
+  agentId: string;
 }
 
 export interface RoutingEvent {
@@ -105,7 +167,9 @@ export type ChatStreamEvent =
   | DoneEvent
   | HandoffEvent
   | OutputSavedEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | PlanProposedEvent
+  | PlanTaskUpdateEvent;
 
 // --- Message content (text + file attachments) ---
 // A focused subset of Anthropic's content block shapes — structurally compatible

@@ -1,22 +1,27 @@
-import { randomUUID } from "crypto";
 import { z } from "zod";
 import { NextRequest } from "next/server";
 import { getAgentById, getTeamTree } from "@/lib/agents/registry";
-import { routeToAgent, streamAgentReply, classifyNextStep, ConversationMessage } from "@/lib/agents/router";
+import { routeToAgent, proposePlan, ConversationMessage } from "@/lib/agents/router";
+import { runOrchestrationLoop, sseLine } from "@/lib/agents/orchestration";
 import { readBusinessProfile } from "@/lib/fs/businessProfile";
 import { readMemoryLog } from "@/lib/fs/memoryLog";
-import { saveOutput } from "@/lib/fs/outputs";
 import { getAnthropicClient, MissingApiKeyError } from "@/lib/anthropic/client";
 import { getOpenAIClient, MissingOpenAIApiKeyError } from "@/lib/openai/client";
 import { getOmniRouteClient, MissingOmniRouteConfigError } from "@/lib/omniroute/client";
-import { AgentDef, ChatStreamEvent, HandoffRecord, MessageContentBlock, Provider, Team } from "@/lib/agents/types";
+import { AgentDef, MessageContentBlock, Provider, Team } from "@/lib/agents/types";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { OMNIROUTE_MODEL_OPTIONS } from "@/lib/agents/modelOptions";
-import { createAgentJob, updateAgentJob } from "@/lib/db/queries";
-
-// Hard cap on autonomous specialist-to-specialist handoffs within a single user turn — a
-// safety net against a classification loop, never expected to be hit in normal use.
-const MAX_AUTONOMOUS_HOPS = 5;
+import {
+  createAgentJob,
+  updateAgentJob,
+  createPlan,
+  createPlanTasks,
+  getPlan,
+  getResumableJob,
+  getPlanByJobId,
+  getInProgressTask,
+} from "@/lib/db/queries";
+import type { PlanTask } from "@/lib/agents/types";
 
 function extractPlainText(content: string | MessageContentBlock[]): string {
   if (typeof content === "string") return content;
@@ -66,10 +71,6 @@ const ChatRequestSchema = z.object({
    *  to the known OmniRoute combos regardless of what the client sends. */
   model: z.string().optional(),
 });
-
-function sseLine(event: ChatStreamEvent): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
-}
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
@@ -157,14 +158,101 @@ export async function POST(req: NextRequest) {
       try {
         let agent = directAgent;
         let routingBrief: string | undefined;
+        let resumedJobId: string | undefined;
+        let resumedPlanTask: { id: string; task: PlanTask } | undefined;
 
         if (!agent && leadAgent) {
-          const decision = await routeToAgent(leadAgent, specialists, fullHistory, businessProfile, memoryLog);
-          agent = specialists.find((s) => s.id === decision.agentId) ?? null;
-          routingBrief = decision.brief;
-          controller.enqueue(
-            sseLine({ type: "routing", from: leadAgent.id, to: decision.agentId, reason: decision.reason })
-          );
+          // If the last turn on this team stopped waiting on the user — a clarifying question,
+          // or a plan task the classifier couldn't resolve without more info — this new message
+          // is almost certainly the answer. Continue that same job/plan instead of starting an
+          // unrelated one, so an approved multi-agent plan doesn't silently die the moment one
+          // task needs a clarification.
+          const resumable = getResumableJob(brandId, leadAgent.team);
+          if (resumable) {
+            const pausedPlan = getPlanByJobId(resumable.id);
+            const pausedTask = pausedPlan ? getInProgressTask(pausedPlan.id) : undefined;
+            if (pausedPlan && pausedTask) {
+              const resumeAgent =
+                specialists.find((s) => s.id === pausedTask.agentId) ??
+                (await getAgentById(pausedTask.agentId));
+              if (resumeAgent) {
+                agent = resumeAgent;
+                routingBrief = pausedTask.brief;
+                resumedJobId = resumable.id;
+                resumedPlanTask = { id: pausedPlan.id, task: pausedTask };
+                controller.enqueue(
+                  sseLine({ type: "routing", from: leadAgent.id, to: resumeAgent.id, reason: "המשך תוכנית שהמתינה לתשובתך" })
+                );
+              }
+            } else {
+              // No plan involved — just a specialist's clarifying question. Nothing to resume by
+              // task graph, but reuse the same job row so the dashboard shows one continuous turn
+              // instead of an unrelated new one starting from scratch.
+              resumedJobId = resumable.id;
+            }
+          }
+        }
+
+        if (!agent && leadAgent) {
+          // Only a lead with more than one specialist can meaningfully plan a multi-agent
+          // sequence — a single-specialist team always gets the immediate single-hop path.
+          const teamCanPlan = specialists.length > 1;
+
+          if (teamCanPlan) {
+            const proposed = await proposePlan(leadAgent, specialists, fullHistory);
+
+            if (proposed.tasks.length > 1) {
+              // A real multi-agent plan — persist it and stop here. Nothing executes until the
+              // user approves it via POST /api/plans/[id]/approve, which opens its own stream.
+              const jobId = createAgentJob({
+                brandId,
+                team: leadAgent.team,
+                leadAgentId: leadAgent.id,
+                currentAgentId: proposed.tasks[0].agentId,
+                label: "ממתין לאישור תוכנית",
+              });
+              updateAgentJob(jobId, { status: "plan_pending_approval" });
+
+              const planId = createPlan({
+                brandId,
+                jobId,
+                team: leadAgent.team,
+                leadAgentId: leadAgent.id,
+                goal: proposed.goal,
+              });
+              createPlanTasks(
+                planId,
+                proposed.tasks.map((t) => ({
+                  agentId: t.agentId,
+                  deliverableType: t.deliverableType,
+                  title: t.title,
+                  brief: t.brief,
+                  dependsOnIndex: t.dependsOnIndex,
+                }))
+              );
+
+              const plan = getPlan(planId)!;
+              controller.enqueue(sseLine({ type: "plan_proposed", plan }));
+              controller.close();
+              return;
+            }
+
+            // A single-task "plan" degenerates into the ordinary immediate routing path —
+            // no plan is persisted and no approval screen is shown.
+            const task = proposed.tasks[0];
+            agent = specialists.find((s) => s.id === task.agentId) ?? null;
+            routingBrief = task.brief;
+            controller.enqueue(
+              sseLine({ type: "routing", from: leadAgent.id, to: task.agentId, reason: proposed.goal })
+            );
+          } else {
+            const decision = await routeToAgent(leadAgent, specialists, fullHistory, businessProfile, memoryLog);
+            agent = specialists.find((s) => s.id === decision.agentId) ?? null;
+            routingBrief = decision.brief;
+            controller.enqueue(
+              sseLine({ type: "routing", from: leadAgent.id, to: decision.agentId, reason: decision.reason })
+            );
+          }
         }
 
         if (!agent) {
@@ -189,132 +277,37 @@ export async function POST(req: NextRequest) {
         const canAutoManage = teamSpecialists.length > 1;
 
         // Visible on the dashboard sidebar without opening the chat — lets the user tell whether
-        // a multi-agent (or even single-agent) turn is actively progressing or stuck.
-        const jobId = createAgentJob({
-          brandId,
-          team: agent.team,
-          leadAgentId: leadAgent?.id,
-          currentAgentId: agent.id,
-          label: "עובד על הבקשה",
-        });
-
-        let hop = 0;
-        while (true) {
-          let fullText = "";
-          let resolvedModelForHop: string | undefined;
-          let streamError: Error | null = null;
-
-          await new Promise<void>((resolve) => {
-            streamAgentReply(
-              agent!,
-              fullHistory,
-              businessProfile,
-              memoryLog,
-              {
-                onText: (delta) => {
-                  fullText += delta;
-                  controller.enqueue(sseLine({ type: "token", text: delta }));
-                },
-                onDone: (text, resolvedModel) => {
-                  fullText = text;
-                  resolvedModelForHop = resolvedModel;
-                  resolve();
-                },
-                onError: (error) => {
-                  streamError = error;
-                  resolve();
-                },
-              },
-              routingBrief
-            ).catch((error) => {
-              streamError = error instanceof Error ? error : new Error(String(error));
-              resolve();
-            });
+        // a multi-agent (or even single-agent) turn is actively progressing or stuck. Reuse the
+        // resumed job's row (if any) instead of creating a disconnected new one.
+        const jobId =
+          resumedJobId ??
+          createAgentJob({
+            brandId,
+            team: agent.team,
+            leadAgentId: leadAgent?.id,
+            currentAgentId: agent.id,
+            label: "עובד על הבקשה",
           });
-
-          if (streamError) {
-            updateAgentJob(jobId, { status: "error", label: (streamError as Error).message.slice(0, 200) });
-            controller.enqueue(sseLine({ type: "error", message: (streamError as Error).message }));
-            controller.close();
-            return;
-          }
-
-          if (!canAutoManage || hop >= MAX_AUTONOMOUS_HOPS) {
-            updateAgentJob(jobId, { status: "done", label: "הסתיים" });
-            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
-            controller.close();
-            return;
-          }
-
-          // Keep the running history in sync so a subsequent hop (or the classifier) sees this
-          // reply as prior context, same as a normal back-and-forth turn would.
-          fullHistory.push({ role: "assistant", content: fullText });
-
-          const decision = await classifyNextStep(agent, fullText, originalRequestText, teamSpecialists);
-
-          if (decision.type === "deliverable_complete") {
-            const now = new Date().toISOString();
-            const handoff: HandoffRecord = {
-              task_id: randomUUID(),
-              from_agent: leadAgent?.id ?? agent.id,
-              to_agent: agent.id,
-              status: "done",
-              deliverable_type: decision.deliverableType,
-              output_path: null,
-              requested_by: "auto",
-              created_at: now,
-              updated_at: now,
-              notes: "",
-            };
-            try {
-              const saved = await saveOutput({
-                brandId,
-                team: agent.team as Team,
-                agentId: agent.id,
-                content: fullText,
-                handoff,
-                title: decision.title,
-              });
-              controller.enqueue(
-                sseLine({ type: "output_saved", outputId: saved.id, format: saved.format, agentId: agent.id })
-              );
-            } catch {
-              // Saving is a bonus, not a requirement — if it fails for any reason, the reply
-              // already streamed to the user in full, so there's nothing to roll back.
-            }
-            updateAgentJob(jobId, { status: "done", label: decision.title || "תוצר נשמר" });
-            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
-            controller.close();
-            return;
-          }
-
-          if (decision.type === "needs_user_input") {
-            updateAgentJob(jobId, { status: "needs_input", label: "ממתין לתשובה מהמשתמש" });
-            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
-            controller.close();
-            return;
-          }
-
-          // handoff_needed
-          const nextAgent = teamSpecialists.find((s) => s.id === decision.agentId);
-          if (!nextAgent) {
-            updateAgentJob(jobId, { status: "done", label: "הסתיים" });
-            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
-            controller.close();
-            return;
-          }
-          hop++;
-          updateAgentJob(jobId, {
-            currentAgentId: nextAgent.id,
-            label: decision.brief || "המשך עבודה",
-            hopCount: hop,
-          });
-          controller.enqueue(
-            sseLine({ type: "handoff", from: agent.id, to: nextAgent.id, reason: decision.brief || "המשך עבודה" })
-          );
-          agent = applyModelOverride(nextAgent);
-          routingBrief = decision.brief;
+        if (resumedJobId) {
+          updateAgentJob(resumedJobId, { status: "running", currentAgentId: agent.id, label: "ממשיך בתוכנית" });
         }
+
+        await runOrchestrationLoop({
+          controller,
+          brandId,
+          leadAgentId: leadAgent?.id,
+          jobId,
+          businessProfile,
+          memoryLog,
+          fullHistory,
+          originalRequestText,
+          applyModelOverride,
+          teamSpecialists,
+          canAutoManage,
+          agent,
+          routingBrief,
+          plan: resumedPlanTask,
+        });
       } catch (error) {
         controller.enqueue(
           sseLine({ type: "error", message: error instanceof Error ? error.message : String(error) })

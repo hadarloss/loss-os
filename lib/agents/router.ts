@@ -6,7 +6,7 @@ import {
   DEFAULT_OMNIROUTE_MODEL,
   OMNIROUTE_MAX_TOKENS,
 } from "@/lib/omniroute/client";
-import { AgentDef, ConversationMessage } from "@/lib/agents/types";
+import { AgentDef, ConversationMessage, PlanTask } from "@/lib/agents/types";
 
 export type { ConversationMessage };
 
@@ -356,6 +356,248 @@ export async function routeToAgent(
   }
 }
 
+// --- Plan proposal (a lead breaks a request into one or more ordered specialist tasks) ---
+
+export interface ProposedTask {
+  agentId: string;
+  deliverableType: string;
+  title: string;
+  brief: string;
+  /** 0-based indices into the same tasks array — resolved to real task ids by the caller. */
+  dependsOnIndex: number[];
+}
+
+export interface ProposedPlan {
+  goal: string;
+  tasks: ProposedTask[];
+}
+
+const PROPOSE_PLAN_TOOL_NAME = "propose_plan";
+const PROPOSE_PLAN_TOOL_DESCRIPTION =
+  "קבע/י את תוכנית העבודה לבקשה הנוכחית: משימה בודדת אחת (ברירת המחדל לרוב הבקשות) או רצף משימות מרובה-סוכנים כשבאמת נדרש.";
+const MAX_PLAN_TASKS = 8;
+
+interface ProposePlanToolInput {
+  goal?: string;
+  tasks?: {
+    agent_id: string;
+    deliverable_type?: string;
+    title?: string;
+    brief?: string;
+    depends_on_index?: number[];
+  }[];
+}
+
+function buildProposePlanToolSchema(specialistIds: string[]) {
+  return {
+    type: "object" as const,
+    properties: {
+      goal: {
+        type: "string",
+        description: "ניסוח קצר של מה שהמשתמש מבקש בפועל — יוצג למשתמש ככותרת התוכנית.",
+      },
+      tasks: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_PLAN_TASKS,
+        items: {
+          type: "object",
+          properties: {
+            agent_id: {
+              type: "string",
+              enum: specialistIds,
+              description: "מזהה מדויק של הסוכן/ית האחראי/ת למשימה",
+            },
+            deliverable_type: {
+              type: "string",
+              description: "סוג התוצר הצפוי, לדוגמה: social_post, funnel_plan",
+            },
+            title: { type: "string", description: "כותרת קצרה וברורה למשימה (עד 80 תווים)" },
+            brief: {
+              type: "string",
+              description: "מה בדיוק הסוכן/ית הזה/ו צריכ/ה לעשות במשימה הזו",
+            },
+            depends_on_index: {
+              type: "array",
+              items: { type: "number" },
+              description:
+                "אינדקסים (0-based) של משימות אחרות במערך שחייבות להסתיים לפני שהמשימה הזו מתחילה. השאר/י ריק אם אין תלות.",
+            },
+          },
+          required: ["agent_id", "deliverable_type", "title", "brief"],
+        },
+        description:
+          "רשימת המשימות לפי סדר ביצוע. אם הבקשה דורשת רק סוכן/ית אחד/ת (המקרה השכיח ביותר) — החזר/י מערך " +
+          "באורך 1 בדיוק. השתמש/י ביותר ממשימה אחת רק כשבאמת נדרש רצף עבודה של כמה סוכנים שונים בזה אחר זה " +
+          "(למשל: מחקר → כתיבת קופי → בדיקת עקביות מיתוגית). אל תפצל בקשה פשוטה למשימות מלאכותיות.",
+      },
+    },
+    required: ["goal", "tasks"],
+  };
+}
+
+function toProposedPlan(input: ProposePlanToolInput, specialistIds: string[]): ProposedPlan {
+  if (!input?.tasks?.length) {
+    throw new Error("המנהל לא החזיר תוכנית תקינה.");
+  }
+  const rawTasks = input.tasks.slice(0, MAX_PLAN_TASKS);
+  for (const t of rawTasks) {
+    if (!t.agent_id || !specialistIds.includes(t.agent_id)) {
+      throw new Error(`המנהל שיבץ משימה לסוכן לא קיים: ${t.agent_id}`);
+    }
+  }
+  return {
+    goal: input.goal?.trim() || "עבודה חדשה",
+    tasks: rawTasks.map((t) => ({
+      agentId: t.agent_id,
+      deliverableType: t.deliverable_type?.trim() || "general",
+      title: t.title?.trim().slice(0, 80) || "משימה",
+      brief: t.brief?.trim() || "",
+      dependsOnIndex: (t.depends_on_index ?? []).filter(
+        (i) => typeof i === "number" && i >= 0 && i < rawTasks.length
+      ),
+    })),
+  };
+}
+
+async function proposePlanAnthropic(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[]
+): Promise<ProposedPlan> {
+  const client = getAnthropicClient();
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
+  const specialistIds = specialists.map((s) => s.id);
+
+  const response = await client.messages.create({
+    model: lead.model || DEFAULT_MODEL,
+    max_tokens: 2048,
+    system: systemPrompt,
+    messages: history.map((m) => ({ role: m.role, content: m.content })),
+    tools: [
+      {
+        name: PROPOSE_PLAN_TOOL_NAME,
+        description: PROPOSE_PLAN_TOOL_DESCRIPTION,
+        input_schema: buildProposePlanToolSchema(specialistIds),
+      },
+    ],
+    tool_choice: { type: "tool", name: PROPOSE_PLAN_TOOL_NAME },
+  });
+
+  const toolUse = response.content.find((block) => block.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
+    throw new Error("המנהל לא החזיר תוכנית תקינה.");
+  }
+  return toProposedPlan(toolUse.input as ProposePlanToolInput, specialistIds);
+}
+
+async function proposePlanOpenAI(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[]
+): Promise<ProposedPlan> {
+  const client = getOpenAIClient();
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
+  const specialistIds = specialists.map((s) => s.id);
+
+  const response = await client.responses.create({
+    model: lead.model || DEFAULT_OPENAI_MODEL,
+    instructions: systemPrompt,
+    input: toOpenAIInput(history),
+    tools: [
+      {
+        type: "function",
+        name: PROPOSE_PLAN_TOOL_NAME,
+        description: PROPOSE_PLAN_TOOL_DESCRIPTION,
+        parameters: buildProposePlanToolSchema(specialistIds),
+        strict: false,
+      },
+    ],
+    tool_choice: { type: "function", name: PROPOSE_PLAN_TOOL_NAME },
+  });
+
+  const call = response.output.find(
+    (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
+  );
+  if (!call) {
+    throw new Error("המנהל לא החזיר תוכנית תקינה.");
+  }
+
+  let input: ProposePlanToolInput;
+  try {
+    input = JSON.parse(call.arguments) as ProposePlanToolInput;
+  } catch {
+    throw new Error("המנהל החזיר תוכנית שלא ניתן לפרש (JSON שגוי).");
+  }
+  return toProposedPlan(input, specialistIds);
+}
+
+async function proposePlanOmniRoute(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[]
+): Promise<ProposedPlan> {
+  const client = getOmniRouteClient();
+  const systemPrompt = buildRoutingSystemPrompt(lead, specialists);
+  const specialistIds = specialists.map((s) => s.id);
+
+  const response = await client.chat.completions.create({
+    model: lead.model || DEFAULT_OMNIROUTE_MODEL,
+    messages: toChatCompletionMessages(systemPrompt, history),
+    max_tokens: 2048,
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: PROPOSE_PLAN_TOOL_NAME,
+          description: PROPOSE_PLAN_TOOL_DESCRIPTION,
+          parameters: buildProposePlanToolSchema(specialistIds),
+        },
+      },
+    ],
+    tool_choice: { type: "function", function: { name: PROPOSE_PLAN_TOOL_NAME } },
+  });
+
+  const call = response.choices[0]?.message.tool_calls?.find(
+    (tc): tc is OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall => tc.type === "function"
+  );
+  if (!call) {
+    throw new Error("המנהל לא החזיר תוכנית תקינה.");
+  }
+
+  let input: ProposePlanToolInput;
+  try {
+    input = JSON.parse(call.function.arguments) as ProposePlanToolInput;
+  } catch {
+    throw new Error("המנהל החזיר תוכנית שלא ניתן לפרש (JSON שגוי).");
+  }
+  return toProposedPlan(input, specialistIds);
+}
+
+function proposePlanOnce(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[]
+): Promise<ProposedPlan> {
+  if (lead.provider === "openai") return proposePlanOpenAI(lead, specialists, history);
+  if (lead.provider === "omniroute") return proposePlanOmniRoute(lead, specialists, history);
+  return proposePlanAnthropic(lead, specialists, history);
+}
+
+/** Asks the team lead to break the current request into one or more ordered specialist tasks —
+ *  same retry-once behavior as routeToAgent, for the same transient-gateway-error reasons. */
+export async function proposePlan(
+  lead: AgentDef,
+  specialists: AgentDef[],
+  history: ConversationMessage[]
+): Promise<ProposedPlan> {
+  try {
+    return await proposePlanOnce(lead, specialists, history);
+  } catch {
+    return proposePlanOnce(lead, specialists, history);
+  }
+}
+
 export interface StreamCallbacks {
   onText: (delta: string) => void;
   onDone: (fullText: string, resolvedModel?: string) => void;
@@ -520,7 +762,9 @@ export async function streamAgentReply(
 export type NextStepDecision =
   | { type: "deliverable_complete"; deliverableType: string; title: string }
   | { type: "handoff_needed"; agentId: string; brief: string }
-  | { type: "needs_user_input" };
+  | { type: "needs_user_input" }
+  | { type: "task_complete" }
+  | { type: "task_needs_revision"; note: string };
 
 const NEXT_STEP_TOOL_NAME = "decide_next_step";
 // Pinned model id, not the "-latest" alias — OmniRoute intermittently fails to resolve alias
@@ -582,22 +826,89 @@ interface NextStepToolInput {
   brief?: string;
 }
 
+/** Narrower prompt/schema used once a plan already fixes which agent runs next — the classifier's
+ *  only remaining job is judging whether *this* task's brief was actually fulfilled. */
+function buildTaskCompletionSystemPrompt(task: PlanTask): string {
+  return [
+    "את/ה מסווג/ת החלטות פנימי בצוות AI שיווקי/מיתוגי — לא פונה למשתמש ישירות.",
+    "לסוכן/ית שענה/תה הוקצתה משימה ספציפית מתוך תוכנית עבודה מאושרת:",
+    `- כותרת המשימה: ${task.title}`,
+    `- סוג התוצר הצפוי: ${task.deliverableType}`,
+    `- דגשים למשימה: ${task.brief || "(אין דגשים נוספים)"}`,
+    "",
+    "תפקידך היחיד: לקרוא את התגובה האחרונה ולהחליט האם היא ממלאת את המשימה הזו במלואה.",
+    "שלוש אפשרויות בלבד:",
+    "- task_complete — התגובה היא חומר קצה שימושי בפועל שממלא את מה שהוגדר במשימה.",
+    "- task_needs_revision — התגובה קרובה אך חסר בה משהו מהותי ביחס למשימה שהוגדרה; ציינו note קצר וממוקד עם מה בדיוק חסר.",
+    "- needs_user_input — התגובה היא שאלת חידוד או בקשת אישור מהמשתמש שלא ניתן להתקדם בלעדיה.",
+    "בספק — בחרו needs_user_input.",
+  ].join("\n");
+}
+
+function buildTaskCompletionToolSchema() {
+  return {
+    type: "object" as const,
+    properties: {
+      decision: {
+        type: "string",
+        enum: ["task_complete", "task_needs_revision", "needs_user_input"],
+        description: "האם המשימה שהוקצתה הושלמה",
+      },
+      note: {
+        type: "string",
+        description: "רק אם decision=task_needs_revision: מה חסר או צריך תיקון ביחס למשימה",
+      },
+    },
+    required: ["decision"],
+  };
+}
+
+interface TaskCompletionToolInput {
+  decision: "task_complete" | "task_needs_revision" | "needs_user_input";
+  note?: string;
+}
+
 /**
  * Runs after a specialist's reply finishes streaming — decides whether the turn is done (save
  * as a deliverable), needs another specialist to continue autonomously, or needs to stop and
  * show the user a real question. Deliberately fails safe: any error, missing tool call, or
  * unparseable response falls back to `needs_user_input`, i.e. today's behavior (show the reply,
  * do nothing automatic) — a classification hiccup should never silently drop or misroute work.
- * Only implemented for `provider: omniroute` agents (all 39 agents in this app use it); other
- * providers also fall back to `needs_user_input`.
+ *
+ * The classification call itself always goes through OmniRoute's cheap, fixed classifier model
+ * (`NEXT_STEP_CLASSIFIER_MODEL`) regardless of which provider actually generated `replyText` —
+ * this is a small, separate judgment call, not a re-run of the replying agent. That means it
+ * works the same for every agent provider (anthropic/openai/omniroute) with no added per-turn
+ * cost on paid providers; an agent only skips it via `auto_handoff_enabled: false` in its
+ * frontmatter, not based on which provider it's on.
+ *
+ * When `activeTask` is passed (executing an approved plan), which agent runs next is already
+ * fixed by the plan's task graph — this call narrows to a single question: did this task's own
+ * brief get fulfilled? (`task_complete` / `task_needs_revision` / `needs_user_input`). Without
+ * `activeTask`, it keeps today's open-ended contract (`deliverable_complete` / `handoff_needed` /
+ * `needs_user_input`), used for single-task turns and direct agent chats.
  */
+// Cheap, deterministic floor applied before the classifier is even asked — no reply this short
+// or this obviously a question back to the user should ever be eligible for deliverable_complete
+// / task_complete, regardless of what the (fallible) classifier model might guess.
+const MIN_DELIVERABLE_LENGTH = 40;
+
+function looksLikeAClarifyingQuestion(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < MIN_DELIVERABLE_LENGTH) return true;
+  // Hebrew or Latin question mark at the very end — a reply that closes by asking the user
+  // something is coordinating next steps, not handing over finished work.
+  return /[?？]\s*$/.test(trimmed);
+}
+
 export async function classifyNextStep(
   agent: AgentDef,
   replyText: string,
   originalRequest: string,
-  specialists: AgentDef[]
+  specialists: AgentDef[],
+  activeTask?: PlanTask
 ): Promise<NextStepDecision> {
-  if (agent.provider !== "omniroute" || !replyText.trim()) {
+  if (agent.auto_handoff_enabled === false || !replyText.trim() || looksLikeAClarifyingQuestion(replyText)) {
     return { type: "needs_user_input" };
   }
 
@@ -606,6 +917,44 @@ export async function classifyNextStep(
 
   try {
     const client = getOmniRouteClient();
+
+    if (activeTask) {
+      const response = await client.chat.completions.create({
+        model: NEXT_STEP_CLASSIFIER_MODEL,
+        messages: [
+          { role: "system", content: buildTaskCompletionSystemPrompt(activeTask) },
+          {
+            role: "user",
+            content: `הבקשה המקורית מהמשתמש:\n${originalRequest.slice(0, 1000)}\n\nהתגובה של ${agent.name} (${agent.id}):\n${replyText.slice(0, 3000)}`,
+          },
+        ],
+        max_tokens: 512,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: NEXT_STEP_TOOL_NAME,
+              description: "קבע/י האם המשימה שהוקצתה הושלמה",
+              parameters: buildTaskCompletionToolSchema(),
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: NEXT_STEP_TOOL_NAME } },
+      });
+
+      const call = response.choices[0]?.message.tool_calls?.find(
+        (tc): tc is OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall => tc.type === "function"
+      );
+      if (!call) return { type: "needs_user_input" };
+
+      const input = JSON.parse(call.function.arguments) as TaskCompletionToolInput;
+      if (input.decision === "task_complete") return { type: "task_complete" };
+      if (input.decision === "task_needs_revision") {
+        return { type: "task_needs_revision", note: input.note?.trim() ?? "" };
+      }
+      return { type: "needs_user_input" };
+    }
+
     const response = await client.chat.completions.create({
       model: NEXT_STEP_CLASSIFIER_MODEL,
       messages: [

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Team, MessageContentBlock } from "@/lib/agents/types";
+import type { Team, MessageContentBlock, Plan } from "@/lib/agents/types";
 import type { PendingAttachment } from "@/components/chat/fileAttachments";
+import { extractText } from "@/components/chat/utils";
 
 export interface ChatMessage {
   /** What actually gets sent to the API / resent as history. */
@@ -99,6 +100,10 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
   const [activeAgentId, setActiveAgentId] = useState<string | undefined>(agentId);
   const [routing, setRouting] = useState<RoutingInfo | null>(null);
   const [handoffChain, setHandoffChain] = useState<HandoffHop[]>([]);
+  // A lead proposed a multi-agent plan that's awaiting approval — not persisted across page
+  // reloads on purpose (re-approving a stale plan against a since-changed conversation would
+  // be confusing); the user re-sends the request if they navigate away before approving.
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // User-picked model override for this browser session only — never persisted, and
@@ -153,12 +158,114 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
     });
   }, []);
 
+  /** Reads an SSE response body and applies every event to chat state — shared by a normal
+   *  chat turn (POST /api/chat) and an approved-plan execution (POST /api/plans/[id]/approve),
+   *  which stream identically once the request is underway. `initialAgentId` seeds which
+   *  agent's bubble token events append to before the first routing/handoff event (if any)
+   *  narrows it further. */
+  const consumeStream = useCallback(
+    async (res: Response, initialAgentId?: string) => {
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({ error: "שגיאה לא ידועה" }));
+        throw new Error(data.error || "שגיאה בעיבוד הבקשה");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistantText = "";
+      let resolvedAgentId = initialAgentId;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          const event = JSON.parse(part.slice(6));
+
+          if (event.type === "routing") {
+            resolvedAgentId = event.to;
+            setActiveAgentId(event.to);
+            setRouting({ from: event.from, to: event.to, reason: event.reason });
+            setMessages((prev) => {
+              const copy = [...prev];
+              copy[copy.length - 1] = { ...copy[copy.length - 1], agentId: event.to };
+              return copy;
+            });
+          } else if (event.type === "plan_proposed") {
+            // No reply text follows a plan proposal in this stream — drop the placeholder
+            // bubble that was optimistically appended before the fetch, and surface the plan
+            // for approval instead.
+            dropTrailingEmptyAssistant();
+            setPlan(event.plan);
+          } else if (event.type === "plan_task_update") {
+            setPlan((prev) =>
+              prev && prev.id === event.planId
+                ? {
+                    ...prev,
+                    tasks: prev.tasks.map((t) => (t.id === event.taskId ? { ...t, status: event.status } : t)),
+                  }
+                : prev
+            );
+          } else if (event.type === "token") {
+            assistantText += event.text;
+            const finalAgentId = resolvedAgentId;
+            setMessages((prev) => {
+              const copy = [...prev];
+              copy[copy.length - 1] = {
+                ...copy[copy.length - 1],
+                content: assistantText,
+                agentId: finalAgentId,
+              };
+              return copy;
+            });
+          } else if (event.type === "handoff") {
+            // A specialist autonomously handed off to another — start a fresh bubble for the
+            // next specialist's reply, which streams in via further token events.
+            resolvedAgentId = event.to;
+            assistantText = "";
+            setActiveAgentId(event.to);
+            setHandoffChain((prev) => [...prev, { from: event.from, to: event.to, reason: event.reason }]);
+            setMessages((prev) => [...prev, { role: "assistant", content: "", agentId: event.to }]);
+          } else if (event.type === "output_saved") {
+            setMessages((prev) => {
+              const copy = [...prev];
+              copy[copy.length - 1] = {
+                ...copy[copy.length - 1],
+                outputSaved: { outputId: event.outputId, format: event.format },
+              };
+              return copy;
+            });
+          } else if (event.type === "done") {
+            if (event.resolvedModel) {
+              setMessages((prev) => {
+                const copy = [...prev];
+                copy[copy.length - 1] = { ...copy[copy.length - 1], resolvedModel: event.resolvedModel };
+                return copy;
+              });
+            }
+          } else if (event.type === "error") {
+            setError(event.message);
+            dropTrailingEmptyAssistant();
+          }
+        }
+      }
+    },
+    [dropTrailingEmptyAssistant]
+  );
+
   const sendMessage = useCallback(
     async (text: string, attachments: PendingAttachment[] = []) => {
       if ((!text.trim() && attachments.length === 0) || isStreaming) return;
       setError(null);
       setRouting(null);
       setHandoffChain([]);
+      setPlan(null);
 
       // Drop any earlier turn left with empty content (e.g. an assistant reply that
       // errored out before any text arrived) — the API rejects empty message content,
@@ -174,9 +281,6 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
       ]);
       setIsStreaming(true);
 
-      let assistantText = "";
-      let resolvedAgentId = activeAgentId;
-
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -190,80 +294,7 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
             model: modelOverride ?? undefined,
           }),
         });
-
-        if (!res.ok || !res.body) {
-          const data = await res.json().catch(() => ({ error: "שגיאה לא ידועה" }));
-          throw new Error(data.error || "שגיאה בשליחת ההודעה");
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop() ?? "";
-
-          for (const part of parts) {
-            if (!part.startsWith("data: ")) continue;
-            const event = JSON.parse(part.slice(6));
-
-            if (event.type === "routing") {
-              resolvedAgentId = event.to;
-              setActiveAgentId(event.to);
-              setRouting({ from: event.from, to: event.to, reason: event.reason });
-              setMessages((prev) => {
-                const copy = [...prev];
-                copy[copy.length - 1] = { ...copy[copy.length - 1], agentId: event.to };
-                return copy;
-              });
-            } else if (event.type === "token") {
-              assistantText += event.text;
-              const finalAgentId = resolvedAgentId;
-              setMessages((prev) => {
-                const copy = [...prev];
-                copy[copy.length - 1] = {
-                  ...copy[copy.length - 1],
-                  content: assistantText,
-                  agentId: finalAgentId,
-                };
-                return copy;
-              });
-            } else if (event.type === "handoff") {
-              // A specialist autonomously handed off to another — start a fresh bubble for the
-              // next specialist's reply, which streams in via further token events.
-              resolvedAgentId = event.to;
-              assistantText = "";
-              setActiveAgentId(event.to);
-              setHandoffChain((prev) => [...prev, { from: event.from, to: event.to, reason: event.reason }]);
-              setMessages((prev) => [...prev, { role: "assistant", content: "", agentId: event.to }]);
-            } else if (event.type === "output_saved") {
-              setMessages((prev) => {
-                const copy = [...prev];
-                copy[copy.length - 1] = {
-                  ...copy[copy.length - 1],
-                  outputSaved: { outputId: event.outputId, format: event.format },
-                };
-                return copy;
-              });
-            } else if (event.type === "done") {
-              if (event.resolvedModel) {
-                setMessages((prev) => {
-                  const copy = [...prev];
-                  copy[copy.length - 1] = { ...copy[copy.length - 1], resolvedModel: event.resolvedModel };
-                  return copy;
-                });
-              }
-            } else if (event.type === "error") {
-              setError(event.message);
-              dropTrailingEmptyAssistant();
-            }
-          }
-        }
+        await consumeStream(res, activeAgentId);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         dropTrailingEmptyAssistant();
@@ -271,8 +302,47 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
         setIsStreaming(false);
       }
     },
-    [messages, activeAgentId, team, brandId, isStreaming, modelOverride, dropTrailingEmptyAssistant]
+    [messages, activeAgentId, team, brandId, isStreaming, modelOverride, consumeStream, dropTrailingEmptyAssistant]
   );
+
+  const approvePlan = useCallback(async () => {
+    if (!plan || isStreaming) return;
+    setError(null);
+    setIsStreaming(true);
+
+    const firstAgentId = plan.tasks.find((t) => t.status === "ready" || t.status === "pending")?.agentId;
+    const history = messages
+      .filter((m) => hasContent(m.content))
+      .map((m) => ({ role: m.role, content: extractText(m.content) }));
+
+    setMessages((prev) => [...prev, { role: "assistant", content: "", agentId: firstAgentId }]);
+
+    try {
+      const res = await fetch(`/api/plans/${plan.id}/approve?brandId=${encodeURIComponent(brandId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ history }),
+      });
+      await consumeStream(res, firstAgentId);
+      setPlan(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      dropTrailingEmptyAssistant();
+    } finally {
+      setIsStreaming(false);
+    }
+  }, [plan, messages, brandId, isStreaming, consumeStream, dropTrailingEmptyAssistant]);
+
+  const cancelPlan = useCallback(async () => {
+    if (!plan) return;
+    const planId = plan.id;
+    setPlan(null);
+    try {
+      await fetch(`/api/plans/${planId}/cancel?brandId=${encodeURIComponent(brandId)}`, { method: "POST" });
+    } catch {
+      // Best-effort — the plan is already cleared from view either way.
+    }
+  }, [plan, brandId]);
 
   return {
     messages,
@@ -284,5 +354,8 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
     activeAgentId,
     modelOverride,
     setModelOverride,
+    plan,
+    approvePlan,
+    cancelPlan,
   };
 }

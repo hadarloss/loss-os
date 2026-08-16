@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RoutingBreadcrumb, type AgentLite } from "@/components/chat/RoutingBreadcrumb";
+import { PlanApprovalCard } from "@/components/chat/PlanApprovalCard";
 import type { ChatMessage, RoutingInfo, HandoffHop } from "@/components/chat/useAgentChat";
 import { extractText } from "@/components/chat/utils";
 import { processFile, type PendingAttachment } from "@/components/chat/fileAttachments";
 import { useVoiceInput } from "@/components/chat/useVoiceInput";
-import type { Team } from "@/lib/agents/types";
+import type { Team, Plan } from "@/lib/agents/types";
 import type { ModelOption } from "@/lib/agents/modelOptions";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +47,9 @@ export function ChatPanel({
   emptyState,
   saveContext,
   modelSelector,
+  plan,
+  onApprovePlan,
+  onCancelPlan,
 }: {
   messages: ChatMessage[];
   onSend: (text: string, attachments?: PendingAttachment[]) => void;
@@ -58,6 +62,10 @@ export function ChatPanel({
   emptyState?: React.ReactNode;
   saveContext?: SaveContext;
   modelSelector?: ModelSelector;
+  /** A lead proposed a multi-agent plan awaiting approval (or currently executing). */
+  plan?: Plan | null;
+  onApprovePlan?: () => void;
+  onCancelPlan?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -120,6 +128,15 @@ export function ChatPanel({
             isStreaming={isStreaming}
           />
         ))}
+        {plan && onApprovePlan && onCancelPlan && (
+          <PlanApprovalCard
+            plan={plan}
+            agentsById={agentsById}
+            isBusy={isStreaming}
+            onApprove={onApprovePlan}
+            onCancel={onCancelPlan}
+          />
+        )}
         {error && (
           <div className="self-stretch rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}

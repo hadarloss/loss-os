@@ -83,10 +83,40 @@ db.exec(`
     team TEXT,
     lead_agent_id TEXT,
     current_agent_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'needs_input', 'error')) DEFAULT 'running',
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'needs_input', 'error', 'plan_pending_approval')) DEFAULT 'running',
     label TEXT NOT NULL DEFAULT '',
     hop_count INTEGER NOT NULL DEFAULT 0,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- A lead-proposed multi-agent plan, awaiting user approval before any task executes.
+  CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    brand_id TEXT NOT NULL REFERENCES brands(id),
+    job_id TEXT REFERENCES agent_jobs(id),
+    team TEXT,
+    lead_agent_id TEXT,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending_approval', 'approved', 'running', 'done', 'cancelled')) DEFAULT 'pending_approval',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One ordered task per agent within a plan. depends_on is a JSON array of plan_task ids,
+  -- parsed/serialized in application code (no reliance on SQLite JSON1 functions).
+  CREATE TABLE IF NOT EXISTS plan_tasks (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id),
+    sequence INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    deliverable_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    brief TEXT NOT NULL DEFAULT '',
+    depends_on TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK (status IN ('pending', 'ready', 'in_progress', 'done', 'skipped', 'failed')) DEFAULT 'pending',
+    output_id TEXT REFERENCES outputs(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -95,6 +125,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_outputs_brand ON outputs(brand_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_output_reviews_output ON output_reviews(output_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_agent_jobs_brand ON agent_jobs(brand_id, updated_at);
+  CREATE INDEX IF NOT EXISTS idx_plan_tasks_plan ON plan_tasks(plan_id, sequence);
+  CREATE INDEX IF NOT EXISTS idx_plans_job ON plans(job_id);
 `);
 
 // `CREATE TABLE IF NOT EXISTS` doesn't add columns to a table that already exists from before
@@ -109,5 +141,37 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 ensureColumn("outputs", "status", "status TEXT NOT NULL DEFAULT 'pending'");
 ensureColumn("outputs", "version", "version INTEGER NOT NULL DEFAULT 1");
 ensureColumn("outputs", "title", "title TEXT");
+
+// SQLite can't ALTER a CHECK constraint in place — a pre-existing agent_jobs table (created
+// before 'plan_pending_approval' was a valid status) needs the whole table rebuilt to accept it.
+function ensureAgentJobsStatusCheck(): void {
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_jobs'`)
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("plan_pending_approval")) return;
+
+  db.exec(`
+    ALTER TABLE agent_jobs RENAME TO agent_jobs_old;
+
+    CREATE TABLE agent_jobs (
+      id TEXT PRIMARY KEY,
+      brand_id TEXT NOT NULL REFERENCES brands(id),
+      team TEXT,
+      lead_agent_id TEXT,
+      current_agent_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'done', 'needs_input', 'error', 'plan_pending_approval')) DEFAULT 'running',
+      label TEXT NOT NULL DEFAULT '',
+      hop_count INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO agent_jobs SELECT * FROM agent_jobs_old;
+    DROP TABLE agent_jobs_old;
+
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_brand ON agent_jobs(brand_id, updated_at);
+  `);
+}
+ensureAgentJobsStatusCheck();
 
 export default db;

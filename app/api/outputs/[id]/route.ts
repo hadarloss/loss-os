@@ -2,7 +2,8 @@ import { z } from "zod";
 import { NextRequest } from "next/server";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { setOutputStatus, addOutputReview, listOutputReviews } from "@/lib/db/queries";
-import { deleteOutput } from "@/lib/fs/outputs";
+import { deleteOutput, getOutputSummary } from "@/lib/fs/outputs";
+import { appendMemoryEntry } from "@/lib/fs/memoryLog";
 
 const PatchSchema = z.object({
   status: z.enum(["approved", "rejected"]),
@@ -35,6 +36,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     authorUserId: guard.user.id,
     action: "approved",
   });
+
+  // Approval isn't just a status flag — it feeds back into the shared memory log so future
+  // replies from this (and other) agents are reinforced by what the user actually confirmed as
+  // good work, the same way a manual "preference" memory note would.
+  const output = await getOutputSummary(brandId!, id);
+  if (output) {
+    await appendMemoryEntry(brandId!, {
+      agent: output.agentId,
+      type: "preference",
+      summary: `התוצר "${output.title}" (${output.deliverableType}) אושר על ידי המשתמש — הסגנון והגישה בו נחשבים לדוגמה טובה להמשך.`,
+      authorUserId: guard.user.id,
+    });
+  }
 
   return Response.json({ ok: true, status: "approved" });
 }
