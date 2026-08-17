@@ -21,6 +21,10 @@ import {
   getResumableJob,
   getPlanByJobId,
   getInProgressTask,
+  updatePlanStatus,
+  updatePlanTaskStatus,
+  refreshReadyPlanTasks,
+  getNextReadyTask,
 } from "@/lib/db/queries";
 import type { PlanTask } from "@/lib/agents/types";
 
@@ -149,8 +153,15 @@ export async function POST(req: NextRequest) {
           mimeType: block.source.media_type,
           base64Data: block.source.data,
         });
-      } catch {
-        // ignored — see comment above
+      } catch (error) {
+        // Non-fatal: the file bytes are already inline in the message, so the conversation is
+        // unaffected — only the uploads gallery misses it. Logged rather than silently dropped,
+        // since previously the only way to notice was finding it absent days later.
+        console.error(
+          `[POST /api/chat] saveUpload failed brand=${brandId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
   }
@@ -195,11 +206,16 @@ export async function POST(req: NextRequest) {
 
   const originalRequestText = extractPlainText(message);
 
+  // Shared between start() and cancel() so a disconnect can settle whichever job this turn owns.
+  let activeJobId: string | null = null;
+
   const stream = new ReadableStream({
     async start(controller) {
       // Hoisted above the try so the catch below can still log which agent was active —
       // `let` inside the try block wouldn't be visible in its own catch.
       let agent: AgentDef | null = directAgent;
+      // Also visible to cancel() below, so a client disconnect can settle the job row.
+      activeJobId = null;
       try {
         let routingBrief: string | undefined;
         let resumedJobId: string | undefined;
@@ -246,16 +262,18 @@ export async function POST(req: NextRequest) {
             const proposed = await proposePlan(leadAgent, specialists, fullHistory);
 
             if (proposed.tasks.length > 1) {
-              // A real multi-agent plan — persist it and stop here. Nothing executes until the
-              // user approves it via POST /api/plans/[id]/approve, which opens its own stream.
+              // A real multi-agent plan. It runs immediately, in this same stream — there is no
+              // approval screen: the user asked not to have to decide which agents work, and the
+              // gate was in practice where planned work stopped and never resumed. The plan rows
+              // are still persisted so progress stays trackable and resumable.
               const jobId = createAgentJob({
                 brandId,
                 team: leadAgent.team,
                 leadAgentId: leadAgent.id,
                 currentAgentId: proposed.tasks[0].agentId,
-                label: "ממתין לאישור תוכנית",
+                label: proposed.tasks[0].title,
               });
-              updateAgentJob(jobId, { status: "plan_pending_approval" });
+              activeJobId = jobId;
 
               const planId = createPlan({
                 brandId,
@@ -274,10 +292,43 @@ export async function POST(req: NextRequest) {
                   dependsOnIndex: t.dependsOnIndex,
                 }))
               );
+              updatePlanStatus(planId, "approved");
 
-              const plan = getPlan(planId)!;
-              controller.enqueue(sseLine({ type: "plan_proposed", plan }));
-              controller.close();
+              refreshReadyPlanTasks(planId);
+              const firstTask = getNextReadyTask(planId);
+              const firstAgent = firstTask
+                ? specialists.find((s) => s.id === firstTask.agentId)
+                : undefined;
+              if (!firstTask || !firstAgent) {
+                updateAgentJob(jobId, { status: "error", label: "התוכנית לא ניתנת להתחלה" });
+                controller.enqueue(
+                  sseLine({ type: "error", message: "לא ניתן היה להתחיל את התוכנית — נסו לנסח מחדש." })
+                );
+                controller.close();
+                return;
+              }
+              updatePlanTaskStatus(firstTask.id, "in_progress");
+
+              // Show the user the steps (titles only — the UI hides agent identity), then work.
+              controller.enqueue(sseLine({ type: "plan_proposed", plan: getPlan(planId)! }));
+
+              await runOrchestrationLoop({
+                controller,
+                brandId,
+                leadAgentId: leadAgent.id,
+                jobId,
+                businessProfile,
+                memoryLog,
+                fullHistory,
+                originalRequestText,
+                applyModelOverride,
+                teamSpecialists: specialists,
+                teamRoster: [leadAgent, ...specialists],
+                canAutoManage: true,
+                agent: applyModelOverride(firstAgent),
+                routingBrief: firstTask.brief,
+                plan: { id: planId, task: firstTask, taskCount: proposed.tasks.length },
+              });
               return;
             }
 
@@ -340,6 +391,7 @@ export async function POST(req: NextRequest) {
             currentAgentId: agent.id,
             label: "עובד על הבקשה",
           });
+        activeJobId = jobId;
         if (resumedJobId) {
           updateAgentJob(resumedJobId, { status: "running", currentAgentId: agent.id, label: "ממשיך בתוכנית" });
         }
@@ -366,6 +418,15 @@ export async function POST(req: NextRequest) {
         console.error(`[POST /api/chat] brand=${brandId} agent=${agent?.id ?? "unknown"}: ${message}`);
         controller.enqueue(sseLine({ type: "error", message }));
         controller.close();
+      }
+    },
+    // Fired when the client goes away mid-stream (tab closed, navigation, lost connection).
+    // Without this the job row stays 'running' forever with nothing left alive to finish it —
+    // which is what left permanently "active" work in the sidebar and stale jobs that later got
+    // resurrected against a roster that had moved on.
+    cancel() {
+      if (activeJobId) {
+        updateAgentJob(activeJobId, { status: "error", label: "השיחה נסגרה לפני שהעבודה הסתיימה" });
       }
     },
   });

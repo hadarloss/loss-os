@@ -28,8 +28,6 @@ export function TeamWorkspaceClient({
     modelOverride,
     setModelOverride,
     plan,
-    approvePlan,
-    cancelPlan,
     resetConversation,
   } = useAgentChat({ brandId, team });
   const agentsById = buildAgentsById([lead, ...specialists]);
@@ -46,11 +44,12 @@ export function TeamWorkspaceClient({
       routing={routing}
       handoffChain={handoffChain}
       agentsById={agentsById}
-      placeholder={`כתבו הודעה ל${lead.name}...`}
+      placeholder={`כתבו הודעה לצוות ה${team === "branding" ? "מיתוג" : "שיווק"}...`}
       saveContext={{ brandId, team }}
       plan={plan}
-      onApprovePlan={approvePlan}
-      onCancelPlan={cancelPlan}
+      // The team answers as one voice: who works on what is decided (and handed off) internally,
+      // which is exactly what the user asked not to have to track.
+      hideAgentIdentity
       onRefresh={resetConversation}
       modelSelector={
         providerOptions.length > 0
@@ -70,8 +69,8 @@ export function TeamWorkspaceClient({
       }
       emptyState={
         <div className="text-sm text-muted-foreground p-3">
-          {lead.icon} שלום! אני {lead.name}, {lead.role}. ספרו לי מה אתם צריכים, ואנתב אתכם
-          למומחה/ית המתאימ/ה בצוות.
+          {lead.icon} ספרו לנו מה אתם צריכים — צוות ה{team === "branding" ? "מיתוג" : "שיווק"} יטפל
+          בזה מקצה לקצה, והתוצרים המוכנים יחכו לכם בעמוד התוצרים.
         </div>
       }
     />

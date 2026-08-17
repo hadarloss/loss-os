@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import type { AgentLite } from "@/components/chat/RoutingBreadcrumb";
 import type { Plan } from "@/lib/agents/types";
 
@@ -22,23 +21,25 @@ const STATUS_DOT: Record<string, string> = {
   failed: "bg-destructive",
 };
 
-export function PlanApprovalCard({
+/**
+ * Live progress for a multi-step piece of work — read-only.
+ *
+ * This used to be an approval gate the user had to click before anything ran. It isn't one
+ * anymore: work starts as soon as the team has a plan, because being asked which agents should
+ * run is exactly the decision the user said they don't want to make — and in practice the gate
+ * was where planned work stopped and never resumed. What remains is visibility: which steps
+ * exist, and how far along they are.
+ */
+export function PlanProgressCard({
   plan,
   agentsById,
-  isBusy,
-  onApprove,
-  onCancel,
+  hideAgentIdentity = false,
 }: {
   plan: Plan;
   agentsById: Record<string, AgentLite>;
-  /** True while the plan is executing (post-approval) — hides the approve/cancel actions and
-   *  just shows live task progress. */
-  isBusy: boolean;
-  onApprove: () => void;
-  onCancel: () => void;
+  /** In a team workspace the steps are shown by what they produce, not by who produces them. */
+  hideAgentIdentity?: boolean;
 }) {
-  const isPending = plan.status === "pending_approval";
-
   return (
     <div className="self-stretch rounded-xl border border-border bg-muted/30 p-3.5 flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -48,7 +49,7 @@ export function PlanApprovalCard({
 
       <ol className="flex flex-col gap-2">
         {plan.tasks.map((task, i) => {
-          const agent = agentsById[task.agentId];
+          const agent = hideAgentIdentity ? undefined : agentsById[task.agentId];
           return (
             <li key={task.id} className="flex items-start gap-2 text-sm">
               <span
@@ -64,7 +65,9 @@ export function PlanApprovalCard({
                       {agent.name}
                     </span>
                   )}
-                  <span className="text-muted-foreground">— {task.title}</span>
+                  <span className={agent ? "text-muted-foreground" : "font-medium"}>
+                    {agent ? `— ${task.title}` : task.title}
+                  </span>
                   <span className="text-[10px] text-muted-foreground/70 rounded-full bg-background px-1.5 py-0.5">
                     {STATUS_LABEL[task.status] ?? task.status}
                   </span>
@@ -75,17 +78,6 @@ export function PlanApprovalCard({
           );
         })}
       </ol>
-
-      {isPending && !isBusy && (
-        <div className="flex gap-2 justify-end">
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-            ביטול
-          </Button>
-          <Button type="button" size="sm" onClick={onApprove}>
-            אשר והתחל
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

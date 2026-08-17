@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RoutingBreadcrumb, type AgentLite } from "@/components/chat/RoutingBreadcrumb";
-import { PlanApprovalCard } from "@/components/chat/PlanApprovalCard";
+import { PlanProgressCard } from "@/components/chat/PlanProgressCard";
 import type { ChatMessage, RoutingInfo, HandoffHop } from "@/components/chat/useAgentChat";
 import { extractText } from "@/components/chat/utils";
+import { stripDeliverableMarkers } from "@/lib/agents/deliverableMarkers";
 import { processFile, type PendingAttachment } from "@/components/chat/fileAttachments";
 import { useVoiceInput } from "@/components/chat/useVoiceInput";
 import type { Team, Plan } from "@/lib/agents/types";
@@ -48,8 +49,7 @@ export function ChatPanel({
   saveContext,
   modelSelector,
   plan,
-  onApprovePlan,
-  onCancelPlan,
+  hideAgentIdentity = false,
   onRefresh,
 }: {
   messages: ChatMessage[];
@@ -63,10 +63,11 @@ export function ChatPanel({
   emptyState?: React.ReactNode;
   saveContext?: SaveContext;
   modelSelector?: ModelSelector;
-  /** A lead proposed a multi-agent plan awaiting approval (or currently executing). */
+  /** The multi-agent plan currently executing — shown as read-only progress, not an approval gate. */
   plan?: Plan | null;
-  onApprovePlan?: () => void;
-  onCancelPlan?: () => void;
+  /** Team workspaces hide which specialist is answering: the user delegates to the team and
+   *  doesn't choose (or need to track) individual agents. Direct agent chats leave it visible. */
+  hideAgentIdentity?: boolean;
   /** Clears the conversation back to a blank slate — shown as a small button in the header. */
   onRefresh?: () => void;
 }) {
@@ -128,7 +129,10 @@ export function ChatPanel({
           </Button>
         </div>
       )}
-      {(routing || handoffChain.length > 0) && (
+      {/* The routing trail is internal orchestration detail — which specialist the lead picked and
+          who it handed off to. Surfaced only in direct agent chats, where the user chose the agent
+          themselves; in a team workspace the team answers as one voice. */}
+      {!hideAgentIdentity && (routing || handoffChain.length > 0) && (
         <div className="p-3 pb-0">
           <RoutingBreadcrumb routing={routing} agentsById={agentsById} handoffChain={handoffChain} />
         </div>
@@ -140,20 +144,15 @@ export function ChatPanel({
           <MessageBubble
             key={i}
             message={message}
-            agent={message.agentId ? agentsById[message.agentId] : undefined}
+            agent={!hideAgentIdentity && message.agentId ? agentsById[message.agentId] : undefined}
+            hideAgentIdentity={hideAgentIdentity}
             saveContext={saveContext}
             isLast={i === messages.length - 1}
             isStreaming={isStreaming}
           />
         ))}
-        {plan && onApprovePlan && onCancelPlan && (
-          <PlanApprovalCard
-            plan={plan}
-            agentsById={agentsById}
-            isBusy={isStreaming}
-            onApprove={onApprovePlan}
-            onCancel={onCancelPlan}
-          />
+        {plan && (
+          <PlanProgressCard plan={plan} agentsById={agentsById} hideAgentIdentity={hideAgentIdentity} />
         )}
         {error && (
           <div className="self-stretch rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -263,12 +262,14 @@ export function ChatPanel({
 function MessageBubble({
   message,
   agent,
+  hideAgentIdentity = false,
   saveContext,
   isLast,
   isStreaming,
 }: {
   message: ChatMessage;
   agent?: AgentLite;
+  hideAgentIdentity?: boolean;
   saveContext?: SaveContext;
   isLast: boolean;
   isStreaming: boolean;
@@ -277,7 +278,9 @@ function MessageBubble({
   const [memoryState, setMemoryState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedAsXlsx, setSavedAsXlsx] = useState<{ outputPath: string } | null>(null);
   const isUser = message.role === "user";
-  const text = extractText(message.content);
+  // The deliverable markers are an internal protocol between the orchestrator and the agents
+  // (see extractDeliverable in lib/agents/orchestration.ts) — never show them to the user.
+  const text = stripDeliverableMarkers(extractText(message.content));
   const showSave =
     !isUser &&
     saveContext &&
@@ -386,7 +389,7 @@ function MessageBubble({
           text || (isLast && isStreaming ? "…" : "")
         )}
       </div>
-      {!isUser && message.resolvedModel && (
+      {!isUser && !hideAgentIdentity && message.resolvedModel && (
         <span className="text-[10px] text-muted-foreground/70 px-1" title="המנוע שהשיב בפועל">
           {message.resolvedModel}
         </span>

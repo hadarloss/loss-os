@@ -28,6 +28,20 @@ export function buildContextBlock(businessProfile: string, memoryLog: string): s
   ].join("\n");
 }
 
+/**
+ * Coerces a value that came out of a model tool call into a trimmed string.
+ *
+ * Every tool here is declared `strict: false`, so the provider does not guarantee a field's
+ * declared JSON type. `value?.trim()` only guards against null/undefined — a numeric or object
+ * value threw `TypeError: ....trim is not a function` from outside any try/catch, which surfaced
+ * to the user as a raw English JS error instead of the intended graceful fallback.
+ */
+function asText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 function buildRosterText(specialists: AgentDef[]): string {
   return specialists
     .map((s) => `- ${s.id} — ${s.icon} ${s.name} (${s.role}): ${s.description}`)
@@ -61,7 +75,14 @@ const GLOBAL_RULES_BLOCK =
   "\n\n## כללים גלובליים מחייבים (חלים על כל תשובה, בלי יוצא מן הכלל)\n" +
   "- לעולם אין לחזור, לצטט או לסכם את מה שהמשתמש/ת כתב/ה — הוא/היא כבר יודע/ת מה כתב/ה. " +
   "התחילו ישר בתוכן התשובה או בשאלת ההבהרה עצמה, בלי \"הבנתי שאתם...\"/\"אז אם אני מסכם...\" או כל ניסוח דומה.\n" +
-  "- אם דרושה שאלת הבהרה — שאלו רק אותה, ישירות, בלי לחזור על שאר הבקשה קודם.";
+  "- אם דרושה שאלת הבהרה — שאלו רק אותה, ישירות, בלי לחזור על שאר הבקשה קודם.\n" +
+  "- כשמתבקש מכם תוצר — הפיקו את התוצר עצמו, מוכן לשימוש כמו שהוא. אל תתארו מה תעשו, אל תציעו " +
+  "תוכנית עבודה במקום התוצר, ואל תפרטו אילו שלבים או אילו סוכנים אחרים נדרשים — התיאום מתבצע " +
+  "אוטומטית מאחורי הקלעים ואינו באחריותכם.\n" +
+  "- **עטיפת תוצר (חובה):** כשהתשובה שלכם כוללת תוצר מוגמר, עטפו אותו — ורק אותו — כך:\n" +
+  "<<<תוצר>>>\n(התוצר המלא כאן)\n<<<סוף תוצר>>>\n" +
+  "כל טקסט תיאום, הערות או שאלות המשך נשארים מחוץ לעטיפה. אם התשובה אינה תוצר מוגמר " +
+  "(שאלת הבהרה, עדכון ביניים) — אל תשתמשו בעטיפה בכלל.";
 
 export function buildAgentSystemPrompt(
   agent: AgentDef,
@@ -388,7 +409,15 @@ export async function routeToAgent(
 ): Promise<RoutingDecision> {
   try {
     return await routeToAgentOnce(lead, specialists, history, businessProfile, memoryLog);
-  } catch {
+  } catch (error) {
+    // Log before retrying: only the *second* failure used to surface anywhere, so a systemic
+    // problem (a bad model id, a provider outage) was diagnosed from whatever the retry happened
+    // to hit rather than from what actually broke first.
+    console.error(
+      `[routeToAgent] lead=${lead.id} first attempt failed, retrying: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     return routeToAgentOnce(lead, specialists, history, businessProfile, memoryLog);
   }
 }
@@ -411,7 +440,7 @@ export interface ProposedPlan {
 
 const PROPOSE_PLAN_TOOL_NAME = "propose_plan";
 const PROPOSE_PLAN_TOOL_DESCRIPTION =
-  "קבע/י את תוכנית העבודה לבקשה הנוכחית: משימה בודדת אחת (ברירת המחדל לרוב הבקשות) או רצף משימות מרובה-סוכנים כשבאמת נדרש.";
+  "קבע/י את תוכנית העבודה המלאה לבקשה הנוכחית: כל השלבים הנדרשים כדי לספק את מה שהמשתמש ביקש, מתחילתו ועד סופו.";
 const MAX_PLAN_TASKS = 8;
 
 interface ProposePlanToolInput {
@@ -458,15 +487,22 @@ function buildProposePlanToolSchema(specialistIds: string[]) {
               type: "array",
               items: { type: "number" },
               description:
-                "אינדקסים (0-based) של משימות אחרות במערך שחייבות להסתיים לפני שהמשימה הזו מתחילה. השאר/י ריק אם אין תלות.",
+                "אינדקסים של משימות קודמות במערך שחייבות להסתיים לפני שהמשימה הזו מתחילה. " +
+                "ספירה מתחילה מ-0: המשימה הראשונה היא 0, השנייה היא 1, וכן הלאה. " +
+                "מותר להפנות רק אחורה — כלומר לאינדקס קטן מזה של המשימה הנוכחית. " +
+                "משימה לעולם אינה תלויה בעצמה. אם אין תלות — השאר/י ריק.",
             },
           },
           required: ["agent_id", "deliverable_type", "title", "brief"],
         },
         description:
-          "רשימת המשימות לפי סדר ביצוע. אם הבקשה דורשת רק סוכן/ית אחד/ת (המקרה השכיח ביותר) — החזר/י מערך " +
-          "באורך 1 בדיוק. השתמש/י ביותר ממשימה אחת רק כשבאמת נדרש רצף עבודה של כמה סוכנים שונים בזה אחר זה " +
-          "(למשל: מחקר → כתיבת קופי → בדיקת עקביות מיתוגית). אל תפצל בקשה פשוטה למשימות מלאכותיות.",
+          "רשימת המשימות לפי סדר ביצוע — התוכנית המלאה, לא רק השלב הראשון. " +
+          "החזר/י משימה אחת רק כשתוצר בודד באמת מספיק כדי לענות על כל הבקשה. " +
+          "החזר/י 2+ משימות כשמתקיים אחד מאלה: הבקשה כוללת יותר מסוג תוצר אחד; " +
+          "התוצר המבוקש מחייב קלט (מחקר, נתונים, קופי, מיתוג) שלא סופק ושסוכן אחר בצוות מייצר; " +
+          "או שהתוצר דורש בדיקה/אישור של מומחה אחר לפני שהוא מוכן. " +
+          "דוגמה: 'קמפיין השקה מלא' = מחקר קהל → לוח תוכן → קופי → בדיקת עקביות מיתוגית. " +
+          "אל תפצל משימה אחת לשלבים מלאכותיים, אבל גם אל תצמצם בקשה מורכבת לשלב אחד ותשאיר/י את השאר לא מבוצע.",
       },
     },
     required: ["goal", "tasks"],
@@ -484,14 +520,23 @@ function toProposedPlan(input: ProposePlanToolInput, specialistIds: string[]): P
     }
   }
   return {
-    goal: input.goal?.trim() || "עבודה חדשה",
-    tasks: rawTasks.map((t) => ({
+    goal: asText(input.goal) || "עבודה חדשה",
+    tasks: rawTasks.map((t, selfIndex) => ({
       agentId: t.agent_id,
-      deliverableType: t.deliverable_type?.trim() || "general",
-      title: t.title?.trim().slice(0, 80) || "משימה",
-      brief: t.brief?.trim() || "",
-      dependsOnIndex: (t.depends_on_index ?? []).filter(
-        (i) => typeof i === "number" && i >= 0 && i < rawTasks.length
+      deliverableType: asText(t.deliverable_type) || "general",
+      title: asText(t.title).slice(0, 80) || "משימה",
+      brief: asText(t.brief),
+      // Backward-only, self-excluding, deduped. Models routinely emit 1-based indices here, which
+      // previously produced a task that depended on *itself*: it passed the old range check, was
+      // stored, and could never become ready — so the plan ran exactly one task and then reported
+      // "התוכנית הושלמה" with everything else silently dropped. Since the array is documented as
+      // execution order, restricting dependencies to earlier tasks also makes cycles impossible.
+      dependsOnIndex: Array.from(
+        new Set(
+          (t.depends_on_index ?? []).filter(
+            (i) => typeof i === "number" && Number.isInteger(i) && i >= 0 && i < selfIndex
+          )
+        )
       ),
     })),
   };
@@ -630,7 +675,12 @@ export async function proposePlan(
 ): Promise<ProposedPlan> {
   try {
     return await proposePlanOnce(lead, specialists, history);
-  } catch {
+  } catch (error) {
+    console.error(
+      `[proposePlan] lead=${lead.id} first attempt failed, retrying: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     return proposePlanOnce(lead, specialists, history);
   }
 }
@@ -1025,7 +1075,7 @@ export async function classifyNextStep(
     if (!result) return { type: "needs_user_input" };
     if (result.decision === "task_complete") return { type: "task_complete" };
     if (result.decision === "task_needs_revision") {
-      return { type: "task_needs_revision", note: result.note?.trim() ?? "" };
+      return { type: "task_needs_revision", note: asText(result.note) };
     }
     return { type: "needs_user_input" };
   }
@@ -1066,13 +1116,13 @@ export async function classifyNextStep(
 
   if (!result) return { type: "needs_user_input" };
   if (result.decision === "handoff_needed" && result.agent_id && specialistIds.includes(result.agent_id)) {
-    return { type: "handoff_needed", agentId: result.agent_id, brief: result.brief?.trim() ?? "" };
+    return { type: "handoff_needed", agentId: result.agent_id, brief: asText(result.brief) };
   }
   if (result.decision === "deliverable_complete") {
     return {
       type: "deliverable_complete",
-      deliverableType: result.deliverable_type?.trim() || "general",
-      title: result.title?.trim().slice(0, 80) || "",
+      deliverableType: asText(result.deliverable_type) || "general",
+      title: asText(result.title).slice(0, 80),
     };
   }
   return { type: "needs_user_input" };

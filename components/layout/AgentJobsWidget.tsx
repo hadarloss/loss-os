@@ -67,19 +67,19 @@ export function AgentJobsWidget({ brandId }: { brandId: string }) {
   return (
     <div className="flex flex-col gap-1 px-1 py-2 border-t border-border mt-1">
       <div className="text-[10px] font-medium text-muted-foreground px-1.5">🔄 עבודה פעילה</div>
-      {jobs.map((job) => {
-        const agent = agentsById[job.current_agent_id];
-        return (
-          <div key={job.id} className="flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[11px]" title={job.label}>
-            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${STATUS_DOT[job.status]}`} aria-hidden />
-            <span className="shrink-0" aria-hidden>
-              {agent?.icon ?? "🤖"}
-            </span>
-            <span className="truncate flex-1 text-sidebar-foreground/80">{agent?.name ?? job.current_agent_id}</span>
-            <span className="text-muted-foreground shrink-0">{elapsedLabel(job.started_at)}</span>
-          </div>
-        );
-      })}
+      {jobs.map((job) => (
+        // Shows *what* is being worked on, not *who* is working on it. The agent name (and the
+        // raw snake_case id it fell back to when a skill file was renamed) is internal routing
+        // detail the user neither chooses nor needs to follow.
+        <div key={job.id} className="flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[11px]" title={job.label}>
+          <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${STATUS_DOT[job.status]}`} aria-hidden />
+          <span className="shrink-0" aria-hidden>
+            ⚙️
+          </span>
+          <span className="truncate flex-1 text-sidebar-foreground/80">{job.label || "עובד על הבקשה"}</span>
+          <span className="text-muted-foreground shrink-0">{elapsedLabel(job.started_at)}</span>
+        </div>
+      ))}
     </div>
   );
 }

@@ -119,8 +119,16 @@ export interface OutputReviewRow {
   created_at: string;
 }
 
-export function setOutputStatus(id: string, status: OutputStatus): void {
-  db.prepare(`UPDATE outputs SET status = ? WHERE id = ?`).run(status, id);
+/** Brand-scoped deliberately: `brandId` comes from the caller's verified membership, `id` from the
+ *  URL. Without the `brand_id` predicate a member of one brand could flip the approval status of
+ *  another brand's deliverable just by knowing (or guessing) its id. Returns false when the row
+ *  isn't this brand's, so the route can 404 rather than silently no-op. */
+export function setOutputStatus(brandId: string, id: string, status: OutputStatus): boolean {
+  return (
+    db
+      .prepare(`UPDATE outputs SET status = ? WHERE id = ? AND brand_id = ?`)
+      .run(status, id, brandId).changes > 0
+  );
 }
 
 /** Returns the new version number. */
@@ -150,10 +158,14 @@ export function addOutputReview(params: {
   );
 }
 
-export function listOutputReviews(outputId: string): OutputReviewRow[] {
+/** Brand-scoped for the same reason as setOutputStatus — review notes carry business feedback and
+ *  must never be readable across tenants on a guessed output id. */
+export function listOutputReviews(brandId: string, outputId: string): OutputReviewRow[] {
   return db
-    .prepare(`SELECT * FROM output_reviews WHERE output_id = ? ORDER BY created_at ASC`)
-    .all(outputId) as OutputReviewRow[];
+    .prepare(
+      `SELECT * FROM output_reviews WHERE output_id = ? AND brand_id = ? ORDER BY created_at ASC`
+    )
+    .all(outputId, brandId) as OutputReviewRow[];
 }
 
 export function deleteOutputRow(id: string): void {
@@ -224,28 +236,58 @@ export function updateAgentJob(
   db.prepare(`UPDATE agent_jobs SET ${sets.join(", ")} WHERE id = ?`).run(...values);
 }
 
+/** How long a job stays eligible to be resumed by the user's next message, and how long a
+ *  `running` row is still believed to belong to a live stream. Anything older is stale: a process
+ *  restart or a closed tab leaves rows behind with no one left to finish them, and resurrecting
+ *  those is what produced the "an old agent came back / that agent no longer exists" errors. */
+const JOB_STALE_AFTER = "-30 minutes";
+
 /** Running jobs, plus recently-finished ones (last 5 minutes) so a completed/blocked job doesn't
- *  just vanish from the dashboard the instant it's done — the user can see it settled. */
+ *  just vanish from the dashboard the instant it's done — the user can see it settled.
+ *  `running` rows are age-bounded too: without that, a job orphaned by a redeploy or a closed tab
+ *  showed as permanently "active" in the sidebar with an ever-growing elapsed timer. */
 export function listRecentAgentJobs(brandId: string): AgentJobRow[] {
   return db
     .prepare(
       `SELECT * FROM agent_jobs
-       WHERE brand_id = ? AND (status = 'running' OR updated_at >= datetime('now', '-5 minutes'))
+       WHERE brand_id = ?
+         AND ((status = 'running' AND updated_at >= datetime('now', ?))
+              OR updated_at >= datetime('now', '-5 minutes'))
        ORDER BY updated_at DESC`
     )
-    .all(brandId) as AgentJobRow[];
+    .all(brandId, JOB_STALE_AFTER) as AgentJobRow[];
 }
 
 /** The most recent job left waiting on the user for this brand+team, if any — the chat route
  *  checks this before starting a fresh turn so answering a clarifying question (or unblocking a
- *  paused plan task) continues the same job/plan instead of abandoning it for an unrelated one. */
+ *  paused plan task) continues the same job/plan instead of abandoning it for an unrelated one.
+ *
+ *  Age-bounded deliberately: this used to match a `needs_input` job of any age, so a days-old
+ *  paused task would silently hijack a brand-new, unrelated request — announcing itself as
+ *  "continuing a plan that was waiting for your answer", and erroring outright when that old plan
+ *  referenced an agent id that no longer exists under skills/. A resume only makes sense while the
+ *  user still has the previous exchange in mind. */
 export function getResumableJob(brandId: string, team: string): AgentJobRow | undefined {
   return db
     .prepare(
       `SELECT * FROM agent_jobs WHERE brand_id = ? AND team = ? AND status = 'needs_input'
+         AND updated_at >= datetime('now', ?)
        ORDER BY updated_at DESC LIMIT 1`
     )
-    .get(brandId, team) as AgentJobRow | undefined;
+    .get(brandId, team, JOB_STALE_AFTER) as AgentJobRow | undefined;
+}
+
+/** Flips `running` rows left behind by a killed process (redeploy, crash, closed tab) to `error`
+ *  so they stop presenting as live work. Called once at startup from instrumentation.ts — nothing
+ *  else ever reaps these, since the code that would have finished them died with its stream. */
+export function failStaleRunningJobs(): number {
+  return db
+    .prepare(
+      `UPDATE agent_jobs SET status = 'error', label = 'הופסק עקב הפעלה מחדש של השרת',
+         updated_at = datetime('now')
+       WHERE status = 'running' AND updated_at < datetime('now', ?)`
+    )
+    .run(JOB_STALE_AFTER).changes;
 }
 
 // --- Plans (multi-agent orchestration) ---
@@ -332,7 +374,11 @@ export function createPlanTasks(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   tasks.forEach((task, index) => {
-    const dependsOnIds = (task.dependsOnIndex ?? []).map((i) => ids[i]);
+    // `.filter(Boolean)` is a real guard, not decoration: an out-of-range or fractional index
+    // resolves to `undefined`, which would serialize as `null` into depends_on and then never
+    // match a real task id — permanently wedging this task at 'pending'. Callers sanitize too
+    // (see toProposedPlan), but this is the last line before the value becomes persistent state.
+    const dependsOnIds = (task.dependsOnIndex ?? []).map((i) => ids[i]).filter(Boolean);
     insert.run(
       ids[index],
       planId,
@@ -434,4 +480,18 @@ export function getNextReadyTask(planId: string): PlanTask | undefined {
     )
     .get(planId) as PlanTaskRow | undefined;
   return row ? planTaskRowToTask(row) : undefined;
+}
+
+/** Tasks that never reached a terminal state. "No ready task" alone does NOT mean the plan
+ *  finished — it also happens when the graph is blocked (a dependency failed or was skipped, or a
+ *  malformed dependency can never be satisfied). Callers must check this before declaring success,
+ *  otherwise a plan that ran one task out of five reports "התוכנית הושלמה". */
+export function listUnfinishedPlanTasks(planId: string): PlanTask[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM plan_tasks WHERE plan_id = ? AND status NOT IN ('done', 'skipped')
+       ORDER BY sequence ASC`
+    )
+    .all(planId) as PlanTaskRow[];
+  return rows.map(planTaskRowToTask);
 }

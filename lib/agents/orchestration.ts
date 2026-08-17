@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { streamAgentReply, classifyNextStep, ConversationMessage } from "@/lib/agents/router";
 import { saveOutput } from "@/lib/fs/outputs";
+import { extractDeliverable, stripDeliverableMarkers } from "@/lib/agents/deliverableMarkers";
 import { AgentDef, ChatStreamEvent, HandoffRecord, PlanTask, Team } from "@/lib/agents/types";
 import {
   updateAgentJob,
@@ -8,12 +9,49 @@ import {
   updatePlanStatus,
   getNextReadyTask,
   refreshReadyPlanTasks,
+  listUnfinishedPlanTasks,
 } from "@/lib/db/queries";
 
 // Hard cap on autonomous steps (specialist-to-specialist handoffs, or plan tasks executed)
 // within a single stream — a safety net against a classification loop, never expected to be
-// hit in normal use.
+// hit in normal use. A plan raises its own ceiling to its task count (see hopLimitFor): the flat
+// 5 used to make any plan of 6-8 tasks structurally impossible to finish, since MAX_PLAN_TASKS
+// is 8 — the run would abort mid-plan and lose the last task's output.
 const MAX_AUTONOMOUS_HOPS = 5;
+
+function hopLimitFor(taskCount?: number): number {
+  return taskCount ? Math.max(MAX_AUTONOMOUS_HOPS, taskCount + 1) : MAX_AUTONOMOUS_HOPS;
+}
+
+/**
+ * The instruction handed to the next agent when work moves between them.
+ *
+ * This exists because the loop appends each reply to `fullHistory` as an *assistant* turn, so the
+ * next agent was previously invoked on a conversation ending in an assistant message it never
+ * wrote but which the API presents as its own — with its actual assignment buried in the system
+ * prompt. The natural continuation of that shape is commentary about what was just said, which is
+ * exactly the "writes out tasks and processes but never does them" behavior users reported. An
+ * explicit user turn makes the assignment an instruction the model must answer, not context it
+ * may narrate. (The revision path already did this, and was notably the one hop that behaved.)
+ */
+function buildHandoffInstruction(params: {
+  previousAgentName: string;
+  previousTaskTitle?: string;
+  nextTitle: string;
+  nextBrief: string;
+}): string {
+  const source = params.previousTaskTitle
+    ? `התוצר של ${params.previousAgentName} למשימה "${params.previousTaskTitle}" מופיע למעלה.`
+    : `התגובה של ${params.previousAgentName} מופיעה למעלה.`;
+  return [
+    source,
+    `המשימה שלך עכשיו: ${params.nextTitle}.`,
+    params.nextBrief ? `דגשים: ${params.nextBrief}` : "",
+    "הפק/י את התוצר עצמו במלואו, מוכן לשימוש — לא תיאור של מה תעשה/י ולא תוכנית עבודה.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 export function sseLine(event: ChatStreamEvent): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
@@ -87,8 +125,9 @@ export interface OrchestrationParams {
   agent: AgentDef;
   routingBrief?: string;
   /** Present when executing an approved plan — task advancement follows the plan's task graph
-   *  instead of the classifier picking an ad-hoc next agent. */
-  plan?: { id: string; task: PlanTask };
+   *  instead of the classifier picking an ad-hoc next agent. `taskCount` raises the autonomous-hop
+   *  ceiling to fit the plan (see hopLimitFor); omit it and a long plan aborts mid-run. */
+  plan?: { id: string; task: PlanTask; taskCount?: number };
 }
 
 /**
@@ -119,6 +158,7 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
   let activeTask = params.plan?.task;
   const planId = params.plan?.id;
   const revisedTaskIds = new Set<string>();
+  const hopLimit = hopLimitFor(params.plan?.taskCount);
 
   let hop = 0;
   while (true) {
@@ -172,7 +212,7 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
       return;
     }
 
-    if (hop >= MAX_AUTONOMOUS_HOPS) {
+    if (hop >= hopLimit) {
       // The autonomous loop ran out of steps without ever resolving to a finished deliverable —
       // the last reply is still shown to the user (already streamed above), but nothing was
       // auto-saved. Surface that explicitly instead of just closing quietly, so the user knows
@@ -201,7 +241,7 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
           team: agent.team as Team,
           agentId: agent.id,
           leadAgentId,
-          content: fullText,
+          content: extractDeliverable(fullText) ?? stripDeliverableMarkers(fullText),
           deliverableType: activeTask.deliverableType,
           title: activeTask.title,
         });
@@ -223,20 +263,52 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
         );
         refreshReadyPlanTasks(planId!);
 
-        const next = getNextReadyTask(planId!);
-        if (!next) {
+        // Pull the next executable task, skipping any whose agent no longer exists. A plan can
+        // outlive the roster it was built against (an agent renamed or removed under skills/) —
+        // that used to abort the entire run with a raw "הסוכן X מהתוכנית לא נמצא", which is the
+        // "old agent, apparently expired" error users hit. Fail just that task and carry on.
+        let next = getNextReadyTask(planId!);
+        let nextAgent = next ? teamSpecialists.find((s) => s.id === next!.agentId) : undefined;
+        while (next && !nextAgent) {
+          updatePlanTaskStatus(next.id, "failed");
+          controller.enqueue(
+            sseLine({
+              type: "plan_task_update",
+              planId: planId!,
+              taskId: next.id,
+              status: "failed",
+              agentId: next.agentId,
+            })
+          );
+          refreshReadyPlanTasks(planId!);
+          next = getNextReadyTask(planId!);
+          nextAgent = next ? teamSpecialists.find((s) => s.id === next!.agentId) : undefined;
+        }
+
+        if (!next || !nextAgent) {
+          // No ready task has two very different meanings. Everything finished — or the graph is
+          // stuck (a dependency failed/was skipped, or a malformed dependency can never resolve).
+          // Reporting the second as "התוכנית הושלמה" is what made a plan that ran one task out of
+          // five look like a success, so check for survivors before claiming completion.
+          const unfinished = listUnfinishedPlanTasks(planId!);
+          if (unfinished.length > 0) {
+            updatePlanStatus(planId!, "cancelled");
+            updateAgentJob(jobId, { status: "error", label: "התוכנית נתקעה" });
+            controller.enqueue(
+              sseLine({
+                type: "error",
+                message: `חלק מהשלבים לא בוצעו: ${unfinished
+                  .map((t) => t.title)
+                  .join(", ")}. מה שכן הושלם נשמר בעמוד התוצרים.`,
+              })
+            );
+            controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
+            controller.close();
+            return;
+          }
           updatePlanStatus(planId!, "done");
           updateAgentJob(jobId, { status: "done", label: "התוכנית הושלמה" });
           controller.enqueue(sseLine({ type: "done", handoff: null, resolvedModel: resolvedModelForHop }));
-          controller.close();
-          return;
-        }
-
-        const nextAgent = teamSpecialists.find((s) => s.id === next.agentId);
-        if (!nextAgent) {
-          updatePlanTaskStatus(next.id, "failed");
-          updateAgentJob(jobId, { status: "error", label: `סוכן לא נמצא: ${next.agentId}` });
-          controller.enqueue(sseLine({ type: "error", message: `הסוכן ${next.agentId} מהתוכנית לא נמצא.` }));
           controller.close();
           return;
         }
@@ -250,6 +322,18 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
         controller.enqueue(
           sseLine({ type: "handoff", from: agent.id, to: nextAgent.id, reason: next.brief || next.title })
         );
+
+        // Hand the work over explicitly — see buildHandoffInstruction for why this turn is what
+        // makes the next agent produce the artifact instead of narrating the process.
+        fullHistory.push({
+          role: "user",
+          content: buildHandoffInstruction({
+            previousAgentName: agent.name,
+            previousTaskTitle: activeTask.title,
+            nextTitle: next.title,
+            nextBrief: next.brief,
+          }),
+        });
 
         agent = applyModelOverride(nextAgent);
         routingBrief = next.brief;
@@ -289,7 +373,7 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
         team: agent.team as Team,
         agentId: agent.id,
         leadAgentId,
-        content: fullText,
+        content: extractDeliverable(fullText) ?? stripDeliverableMarkers(fullText),
         deliverableType: decision.deliverableType,
         title: decision.title,
       });
@@ -331,6 +415,18 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
     controller.enqueue(
       sseLine({ type: "handoff", from: agent.id, to: nextAgent.id, reason: decision.brief || "המשך עבודה" })
     );
+
+    // Same explicit hand-off as the plan path — without it the next agent inherits a history
+    // ending in someone else's assistant turn and tends to comment on it rather than do the work.
+    fullHistory.push({
+      role: "user",
+      content: buildHandoffInstruction({
+        previousAgentName: agent.name,
+        nextTitle: decision.brief || "המשך העבודה על הבקשה המקורית",
+        nextBrief: decision.brief,
+      }),
+    });
+
     agent = applyModelOverride(nextAgent);
     routingBrief = decision.brief;
   }

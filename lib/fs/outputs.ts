@@ -99,8 +99,15 @@ export async function saveOutput(params: {
         ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`, title);
 
         return { id, relativePath, format: "xlsx" };
-      } catch {
-        // fall through to markdown save below
+      } catch (error) {
+        // Falling back to markdown is the right behavior — a spreadsheet render failure must not
+        // lose the deliverable — but it used to happen with no trace at all, so "the model didn't
+        // produce a task list" and "exceljs/disk/DB failed" looked identical from the outside.
+        console.error(
+          `[saveOutput] xlsx render failed for ${params.handoff.deliverable_type}, saving as markdown: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
   }

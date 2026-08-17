@@ -7,6 +7,8 @@ const FETCH_TIMEOUT_MS = 8000;
 const MAX_RESPONSE_BYTES = 500_000;
 const MAX_EXTRACTED_CHARS = 6000;
 const MAX_REDIRECTS = 3;
+/** Hard wall-clock ceiling for the entire fetch including redirects — see fetchWebsiteText. */
+const TOTAL_DEADLINE_MS = 12_000;
 
 function isPrivateOrReservedIp(ip: string): boolean {
   if (net.isIPv4(ip)) {
@@ -143,7 +145,17 @@ export async function fetchWebsiteText(rawUrl: string): Promise<string | null> {
     return null;
   }
 
-  const html = await fetchHtmlOnce(url, MAX_REDIRECTS);
+  // Node's `timeout` option is an *idle* timeout — it resets on every byte, so a server trickling
+  // one byte every few seconds keeps the request (and the onboarding call awaiting it) alive
+  // indefinitely. This is the only hard wall-clock bound across the whole redirect chain.
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const html = await Promise.race([
+    fetchHtmlOnce(url, MAX_REDIRECTS),
+    new Promise<null>((resolve) => {
+      deadlineTimer = setTimeout(() => resolve(null), TOTAL_DEADLINE_MS);
+    }),
+  ]).finally(() => clearTimeout(deadlineTimer));
+
   if (!html) return null;
 
   const text = extractReadableText(html);

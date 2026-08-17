@@ -91,7 +91,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const version = bumpOutputVersion(id);
-  setOutputStatus(id, "pending");
+  // Reaching here already proves brand ownership (getOutputForRevision + overwriteOutputContent
+  // are both brand-scoped), but pass brandId anyway so the predicate is uniform across callers.
+  setOutputStatus(brandId!, id, "pending");
   addOutputReview({
     outputId: id,
     brandId: brandId!,

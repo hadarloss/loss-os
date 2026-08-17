@@ -287,14 +287,20 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             brandId,
-            agentId: activeAgentId,
-            team: activeAgentId ? undefined : team,
+            // In a team workspace always address the team, never the agent that happened to speak
+            // last. Sending `activeAgentId` (which any routing/handoff event set, and which
+            // sessionStorage kept across navigations) pinned every later message to that one
+            // specialist — the lead never planned again, and the server's resume path, which sits
+            // behind the same `!agentId` branch, became permanently unreachable. A direct agent
+            // chat still targets its own fixed agent, because that one the user really did pick.
+            agentId: team ? undefined : agentId,
+            team: team ?? undefined,
             message: outgoingContent,
             history,
             model: modelOverride ?? undefined,
           }),
         });
-        await consumeStream(res, activeAgentId);
+        await consumeStream(res, team ? undefined : agentId);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         dropTrailingEmptyAssistant();
@@ -302,7 +308,7 @@ export function useAgentChat({ brandId, agentId, team }: UseAgentChatOptions) {
         setIsStreaming(false);
       }
     },
-    [messages, activeAgentId, team, brandId, isStreaming, modelOverride, consumeStream, dropTrailingEmptyAssistant]
+    [messages, agentId, activeAgentId, team, brandId, isStreaming, modelOverride, consumeStream, dropTrailingEmptyAssistant]
   );
 
   const approvePlan = useCallback(async () => {

@@ -29,7 +29,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return Response.json({ ok: true, deleted: true });
   }
 
-  setOutputStatus(id, "approved");
+  // Brand-scoped: `requireBrandMember` proves the caller belongs to `brandId`, but not that this
+  // output does. Without the scoped update, a member of one brand could approve another brand's
+  // deliverable by id alone — the rejected branch above already got this right.
+  if (!setOutputStatus(brandId!, id, "approved")) {
+    return Response.json({ error: "לא נמצא" }, { status: 404 });
+  }
   addOutputReview({
     outputId: id,
     brandId: brandId!,
@@ -59,5 +64,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const guard = await requireBrandMember(brandId);
   if (guard.response) return guard.response;
 
-  return Response.json({ reviews: listOutputReviews(id) });
+  // Brand-scoped for the same reason as the approve path above — review notes carry business
+  // feedback and must not be readable across tenants on a guessed output id.
+  return Response.json({ reviews: listOutputReviews(brandId!, id) });
 }

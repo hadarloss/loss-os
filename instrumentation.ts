@@ -11,5 +11,15 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("@/lib/db/schema");
+
+    // Any job still marked 'running' at startup belonged to a stream this process didn't inherit —
+    // the request that owned it died with the previous process (redeploy, crash). Nothing else
+    // ever settles those rows, so they lingered as permanently "active" work in the sidebar and
+    // as stale state that later turns could resurrect.
+    const { failStaleRunningJobs } = await import("@/lib/db/queries");
+    const reaped = failStaleRunningJobs();
+    if (reaped > 0) {
+      console.log(`[startup] marked ${reaped} stale running job(s) as failed`);
+    }
   }
 }

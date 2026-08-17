@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 function subscribeNoop() {
   return () => {};
@@ -38,6 +38,16 @@ export function useVoiceInput({ lang = "he-IL", onTranscriptChange }: UseVoiceIn
   // useSyncExternalStore (not a render-time check) so the server snapshot (false)
   // and the client snapshot don't disagree during hydration.
   const isSupported = useSyncExternalStore(subscribeNoop, getSpeechRecognitionSupport, getServerSnapshot);
+
+  // Recognition runs with `continuous = true` and is only stopped by an explicit click. Without
+  // this cleanup, navigating away mid-recording left it running — the browser's microphone
+  // indicator stayed on and audio kept being captured for a component that no longer exists.
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop?.();
+      recognitionRef.current = null;
+    };
+  }, []);
 
   const start = useCallback(
     (currentDraftText: string) => {
