@@ -1,76 +1,136 @@
 import ExcelJS from "exceljs";
 
-export interface GanttTask {
-  task: string;
-  start: string;
-  end: string;
-  owner?: string;
+export interface ParsedTable {
+  headers: string[];
+  rows: string[][];
 }
 
 const FENCED_JSON_RE = /```json\s*([\s\S]*?)```/i;
 
+/** Cell text cleanup: markdown emphasis and stray pipes contribute nothing to a spreadsheet. */
+function cleanCell(value: string): string {
+  return value
+    .replace(/\*\*/g, "")
+    .replace(/^\s*\|/, "")
+    .replace(/\|\s*$/, "")
+    .trim();
+}
+
+function splitMarkdownRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map(cleanCell);
+}
+
+/** A markdown separator row: |---|:--:|---| and friends. */
+function isSeparatorRow(line: string): boolean {
+  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes("-");
+}
+
 /**
- * Looks for a fenced ```json block containing an array of {task, start, end, owner}
- * objects inside a deliverable's markdown content. Returns null (rather than throwing)
- * when no such block exists or it doesn't parse — callers should fall back to a plain
- * markdown save in that case, never hard-fail the save.
+ * The first markdown table in the content, as headers + rows.
+ *
+ * This is the path that actually matters in practice: agents write calendars and Gantts as
+ * markdown tables, because that is what reads well in chat. The previous implementation only
+ * accepted a hand-specified fenced ```json array, so a perfectly good schedule silently degraded
+ * to a plain .md file whenever the model formatted it the natural way.
  */
-export function parseGanttFromContent(content: string): GanttTask[] | null {
+function parseMarkdownTable(content: string): ParsedTable | null {
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length - 1; i++) {
+    const header = lines[i];
+    if (!header.includes("|")) continue;
+    if (!isSeparatorRow(lines[i + 1])) continue;
+
+    const headers = splitMarkdownRow(header).filter((h) => h.length > 0);
+    if (headers.length < 2) continue;
+
+    const rows: string[][] = [];
+    for (let j = i + 2; j < lines.length; j++) {
+      const line = lines[j];
+      if (!line.includes("|")) break;
+      if (isSeparatorRow(line)) continue;
+      const cells = splitMarkdownRow(line);
+      // Skip spacer rows that carry no content at all (e.g. | | | | ).
+      if (cells.every((c) => c.length === 0 || c === "—" || c === "-")) continue;
+      rows.push(cells);
+    }
+    if (rows.length > 0) return { headers, rows };
+  }
+  return null;
+}
+
+/** A fenced ```json array of objects, as headers + rows. Keys become columns, union-ordered. */
+function parseJsonTable(content: string): ParsedTable | null {
   const match = content.match(FENCED_JSON_RE);
   if (!match) return null;
-
   try {
     const parsed = JSON.parse(match[1]);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
 
-    const tasks: GanttTask[] = [];
+    const headers: string[] = [];
     for (const item of parsed) {
-      if (
-        !item ||
-        typeof item !== "object" ||
-        typeof item.task !== "string" ||
-        typeof item.start !== "string" ||
-        typeof item.end !== "string"
-      ) {
-        return null;
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      for (const key of Object.keys(item)) {
+        if (!headers.includes(key)) headers.push(key);
       }
-      tasks.push({
-        task: item.task,
-        start: item.start,
-        end: item.end,
-        owner: typeof item.owner === "string" ? item.owner : undefined,
-      });
     }
-    return tasks;
+    if (headers.length === 0) return null;
+
+    const rows = parsed.map((item) =>
+      headers.map((h) => {
+        const v = (item as Record<string, unknown>)[h];
+        return v === undefined || v === null ? "" : String(v);
+      })
+    );
+    return { headers, rows };
   } catch {
     return null;
   }
 }
 
-/** Builds an .xlsx workbook buffer for a Gantt-shaped task list, Hebrew RTL-friendly headers. */
-export async function buildGanttWorkbook(tasks: GanttTask[]): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("גאנט", { views: [{ rightToLeft: true }] });
+/**
+ * Tabular content inside a deliverable, if there is any — JSON block first (more precise), then
+ * the first markdown table. Returns null rather than throwing so a save never hard-fails.
+ */
+export function parseTableFromContent(content: string): ParsedTable | null {
+  return parseJsonTable(content) ?? parseMarkdownTable(content);
+}
 
-  sheet.columns = [
-    { header: "משימה", key: "task", width: 40 },
-    { header: "תאריך התחלה", key: "start", width: 16 },
-    { header: "תאריך סיום", key: "end", width: 16 },
-    { header: "אחראי/ערוץ", key: "owner", width: 20 },
-  ];
+/**
+ * Whether a table is substantial enough to hand over as a spreadsheet on its own, independent of
+ * what the classifier happened to name the deliverable type. Guards against turning a two-row
+ * comparison inside an article into a download.
+ */
+export function isSubstantialTable(table: ParsedTable): boolean {
+  return table.headers.length >= 3 && table.rows.length >= 3;
+}
+
+/** Builds an .xlsx workbook from any parsed table, Hebrew RTL-friendly. */
+export async function buildTableWorkbook(table: ParsedTable, sheetName = "גאנט"): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  // Excel rejects these characters in a sheet name and caps it at 31 chars.
+  const safeName = sheetName.replace(/[\\/*?:[\]]/g, " ").slice(0, 31) || "גיליון";
+  const sheet = workbook.addWorksheet(safeName, { views: [{ rightToLeft: true }] });
+
+  sheet.columns = table.headers.map((header) => ({
+    header,
+    key: header,
+    // Wide enough for Hebrew content without being unwieldy; title columns are the long ones.
+    width: Math.min(Math.max(header.length + 6, 16), 45),
+  }));
 
   const headerRow = sheet.getRow(1);
   headerRow.font = { bold: true };
   headerRow.alignment = { horizontal: "right" };
 
-  for (const t of tasks) {
-    sheet.addRow({ task: t.task, start: t.start, end: t.end, owner: t.owner ?? "" });
+  for (const row of table.rows) {
+    // Pad/trim so a ragged markdown row can't shift cells into the wrong columns.
+    sheet.addRow(table.headers.map((_, i) => row[i] ?? ""));
   }
 
   sheet.eachRow((row) => {
-    row.alignment = { horizontal: "right" };
+    row.alignment = { horizontal: "right", wrapText: true };
   });
 
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }

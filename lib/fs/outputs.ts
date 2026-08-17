@@ -5,10 +5,22 @@ import { safeJoin, slugify } from "@/lib/fs/paths";
 import { HandoffRecord, Team } from "@/lib/agents/types";
 import db from "@/lib/db/schema";
 import { deleteOutputRow } from "@/lib/db/queries";
-import { parseGanttFromContent, buildGanttWorkbook } from "@/lib/fs/generators/gantt";
+import { parseTableFromContent, buildTableWorkbook, isSubstantialTable } from "@/lib/fs/generators/gantt";
 
-/** deliverable_type values that should attempt an xlsx Gantt render before falling back to markdown. */
-const GANTT_DELIVERABLE_TYPES = new Set(["gantt", "content_calendar"]);
+/**
+ * Whether a deliverable type is schedule/plan shaped and should render as a spreadsheet.
+ *
+ * Substring matching, not an exact-value set. `deliverable_type` is free text invented by the
+ * classifier per turn, so an exact set silently missed real Gantts: a production content calendar
+ * came back typed `gantt_content_calendar` and fell through to markdown purely because that
+ * string wasn't one of the two literals the old Set contained.
+ */
+const TABULAR_TYPE_HINTS = ["gantt", "calendar", "schedule", "timeline", "plan", "גאנט", "לוח"];
+
+function looksTabularType(deliverableType: string): boolean {
+  const normalized = deliverableType.toLowerCase();
+  return TABULAR_TYPE_HINTS.some((hint) => normalized.includes(hint));
+}
 
 const OUTPUTS_DIR = path.join(process.cwd(), "outputs");
 
@@ -76,39 +88,38 @@ export async function saveOutput(params: {
   const baseName = `${params.handoff.task_id}-${slugify(params.agentId)}`;
   const title = params.title?.trim() || fallbackTitle(params.content);
 
-  // Gantt-shaped deliverables render to .xlsx when the content contains a parseable
-  // fenced ```json task list; anything else (or a parse failure) falls back to plain
-  // markdown so a save never hard-fails.
-  if (GANTT_DELIVERABLE_TYPES.has(params.handoff.deliverable_type)) {
-    const tasks = parseGanttFromContent(params.content);
-    if (tasks) {
-      try {
-        const buffer = await buildGanttWorkbook(tasks);
-        const xlsxPath = safeJoin(dir, `${baseName}.xlsx`);
-        const metaPath = safeJoin(dir, `${baseName}.meta.json`);
-        const relativePath = `outputs/${folder}/${baseName}.xlsx`;
+  // A deliverable renders to .xlsx when it actually contains a table — either because the type
+  // says it's a schedule, or because the table is substantial enough to stand alone as one. Both
+  // the markdown table an agent naturally writes and an explicit ```json block are accepted.
+  // A parse failure (or anything non-tabular) falls back to markdown so a save never hard-fails.
+  const table = parseTableFromContent(params.content);
+  if (table && (looksTabularType(params.handoff.deliverable_type) || isSubstantialTable(table))) {
+    try {
+      const buffer = await buildTableWorkbook(table, title);
+      const xlsxPath = safeJoin(dir, `${baseName}.xlsx`);
+      const metaPath = safeJoin(dir, `${baseName}.meta.json`);
+      const relativePath = `outputs/${folder}/${baseName}.xlsx`;
 
-        const handoffWithPath: HandoffRecord = { ...params.handoff, output_path: relativePath };
-        await fs.writeFile(xlsxPath, buffer);
-        await fs.writeFile(metaPath, JSON.stringify(handoffWithPath, null, 2), "utf-8");
+      const handoffWithPath: HandoffRecord = { ...params.handoff, output_path: relativePath };
+      await fs.writeFile(xlsxPath, buffer);
+      await fs.writeFile(metaPath, JSON.stringify(handoffWithPath, null, 2), "utf-8");
 
-        const id = randomUUID();
-        db.prepare(
-          `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format, title)
-           VALUES (?, ?, ?, ?, ?, ?, 'xlsx', ?)`
-        ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`, title);
+      const id = randomUUID();
+      db.prepare(
+        `INSERT INTO outputs (id, brand_id, agent_id, team, deliverable_type, file_path, format, title)
+         VALUES (?, ?, ?, ?, ?, ?, 'xlsx', ?)`
+      ).run(id, params.brandId, params.agentId, params.team, params.handoff.deliverable_type, `${folder}/${baseName}.xlsx`, title);
 
-        return { id, relativePath, format: "xlsx" };
-      } catch (error) {
-        // Falling back to markdown is the right behavior — a spreadsheet render failure must not
-        // lose the deliverable — but it used to happen with no trace at all, so "the model didn't
-        // produce a task list" and "exceljs/disk/DB failed" looked identical from the outside.
-        console.error(
-          `[saveOutput] xlsx render failed for ${params.handoff.deliverable_type}, saving as markdown: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
+      return { id, relativePath, format: "xlsx" };
+    } catch (error) {
+      // Falling back to markdown is the right behavior — a spreadsheet render failure must not
+      // lose the deliverable — but it used to happen with no trace at all, so "the model didn't
+      // produce a table" and "exceljs/disk/DB failed" looked identical from the outside.
+      console.error(
+        `[saveOutput] xlsx render failed for ${params.handoff.deliverable_type}, saving as markdown: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 

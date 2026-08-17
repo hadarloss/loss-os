@@ -268,4 +268,107 @@ function ensureAgentJobsStatusCheck(): void {
 }
 ensureAgentJobsStatusCheck();
 
+/**
+ * Repairs foreign keys left pointing at `agent_jobs_old` by the rebuild above.
+ *
+ * This is the actual, long-standing cause of the recurring production error
+ * `no such table: main.agent_jobs_old`, and it is not a bug in *when* migrations run — three
+ * previous fixes addressed timing and re-entrancy, and none of them could have helped.
+ *
+ * `ALTER TABLE agent_jobs RENAME TO agent_jobs_old` does not just rename the table: modern SQLite
+ * (legacy_alter_table = OFF, the default) also rewrites every reference to it elsewhere in the
+ * schema. That silently changed `plans.job_id` from `REFERENCES agent_jobs(id)` to
+ * `REFERENCES "agent_jobs_old"(id)`. The migration then created a fresh `agent_jobs` and dropped
+ * `agent_jobs_old`, leaving `plans` with a foreign key to a table that no longer exists — a
+ * permanent defect baked into the `plans` DDL, entirely independent of the migration that caused
+ * it. With `foreign_keys = ON`, every INSERT INTO plans then fails.
+ *
+ * Which is exactly why only *complex* requests broke: a multi-step plan is the only thing that
+ * writes to `plans`. Single-agent requests never touch it and always worked. And it is why
+ * inspecting `agent_jobs` (which is genuinely healthy) never revealed anything.
+ *
+ * The rebuild below runs under `legacy_alter_table = ON` so this RENAME cannot play the same
+ * trick on tables that reference `plans` (e.g. plan_tasks.plan_id).
+ */
+const PLANS_FK_REPAIR_MIGRATION = "plans_job_id_fk_repair";
+
+function ensurePlansForeignKeyIntact(): void {
+  if (migrationApplied(PLANS_FK_REPAIR_MIGRATION)) return;
+
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'`)
+    .get() as { sql: string } | undefined;
+
+  // Nothing to repair on a database whose `plans` table was created after this bug, or that
+  // never ran the agent_jobs rebuild at all.
+  if (!row || !row.sql.includes("agent_jobs_old")) {
+    markMigrationApplied(PLANS_FK_REPAIR_MIGRATION);
+    return;
+  }
+
+  const foreignKeysWereOn = db.pragma("foreign_keys", { simple: true }) === 1;
+  // Both pragmas are no-ops inside a transaction, so they must be set around it, not within.
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+
+      ALTER TABLE plans RENAME TO plans_fk_repair_old;
+
+      CREATE TABLE plans (
+        id TEXT PRIMARY KEY,
+        brand_id TEXT NOT NULL REFERENCES brands(id),
+        job_id TEXT REFERENCES agent_jobs(id),
+        team TEXT,
+        lead_agent_id TEXT,
+        goal TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending_approval', 'approved', 'running', 'done', 'cancelled')) DEFAULT 'pending_approval',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      INSERT INTO plans SELECT * FROM plans_fk_repair_old;
+      DROP TABLE plans_fk_repair_old;
+
+      CREATE INDEX IF NOT EXISTS idx_plans_brand ON plans(brand_id, updated_at);
+
+      COMMIT;
+    `);
+    markMigrationApplied(PLANS_FK_REPAIR_MIGRATION);
+  } finally {
+    db.pragma("legacy_alter_table = OFF");
+    if (foreignKeysWereOn) db.pragma("foreign_keys = ON");
+  }
+}
+ensurePlansForeignKeyIntact();
+
+/**
+ * Fails loudly at startup if any table still references a table that doesn't exist.
+ *
+ * The dangling-FK defect above survived three rounds of investigation precisely because nothing
+ * ever checked for it — the schema looked fine as long as you only inspected the table that had
+ * been renamed, and the damage surfaced only as a confusing runtime error on one specific insert.
+ * This turns that entire class of problem into a startup log line instead of a mystery.
+ */
+function warnOnDanglingForeignKeys(): void {
+  const tables = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+    .all() as { name: string }[];
+  const existing = new Set(tables.map((t) => t.name));
+
+  for (const { name } of tables) {
+    const fks = db.pragma(`foreign_key_list(${JSON.stringify(name)})`) as { table: string }[];
+    for (const fk of fks) {
+      if (!existing.has(fk.table)) {
+        console.error(
+          `[schema] DANGLING FOREIGN KEY: table "${name}" references missing table "${fk.table}". ` +
+            `Writes to "${name}" will fail with "no such table: main.${fk.table}".`
+        );
+      }
+    }
+  }
+}
+warnOnDanglingForeignKeys();
+
 export default db;
