@@ -93,7 +93,7 @@ export function approveBusinessProfile(brandId: string, userId: string): boolean
 }
 
 /** Rejects a profile that's awaiting review — sends it back to `template` so the user can redo
- *  onboarding with אוריתה, instead of approving a draft they don't want live. No-op (returns
+ *  onboarding with אורית, instead of approving a draft they don't want live. No-op (returns
  *  false) if it isn't currently `pending_approval`, matching approveBusinessProfile's guard. */
 export async function rejectPendingBusinessProfile(brandId: string): Promise<boolean> {
   const current = await ensureSeeded(brandId);

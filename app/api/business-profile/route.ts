@@ -17,18 +17,10 @@ export async function GET(req: NextRequest) {
   });
 }
 
-// The minimum number of user turns אוריתה must have exchanged before the resulting profile can
-// be saved — a hard, server-side-enforced floor (not just persona instructions the model could
-// skip) so a real interview always happens before a fresh onboarding profile goes up for review.
-const MIN_ONBOARDING_USER_TURNS = 12;
-
-const UpdateSchema = z.object({
-  content: z.string().min(1),
-  /** Set when this save comes from אוריתה's onboarding chat rather than a manual edit — gates
-   *  the save on `history` actually containing enough user turns. */
-  fromOnboarding: z.boolean().optional(),
-  history: z.array(z.object({ role: z.enum(["user", "assistant"]) })).optional(),
-});
+// Manual edits only — the onboarding wizard doesn't use this endpoint at all, it goes through
+// /api/business-profile/complete-onboarding (initial draft) and /request-revision (revision
+// rounds), both of which run אורית and enforce their own preconditions before writing.
+const UpdateSchema = z.object({ content: z.string().min(1) });
 
 export async function PUT(req: NextRequest) {
   const brandId = req.nextUrl.searchParams.get("brandId");
@@ -39,18 +31,6 @@ export async function PUT(req: NextRequest) {
   const parsed = UpdateSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.message }, { status: 400 });
-  }
-
-  if (parsed.data.fromOnboarding) {
-    const userTurns = (parsed.data.history ?? []).filter((m) => m.role === "user").length;
-    if (userTurns < MIN_ONBOARDING_USER_TURNS) {
-      return Response.json(
-        {
-          error: `צריך להשלים לפחות ${MIN_ONBOARDING_USER_TURNS} שאלות עם אוריתה לפני שאפשר לשמור את תיק העסק (הושלמו ${userTurns}).`,
-        },
-        { status: 400 }
-      );
-    }
   }
 
   await writeBusinessProfile(brandId!, parsed.data.content);

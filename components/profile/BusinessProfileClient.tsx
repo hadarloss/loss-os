@@ -47,6 +47,10 @@ export function BusinessProfileClient({
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [revising, setRevising] = useState(false);
+  const [showRevisionBox, setShowRevisionBox] = useState(false);
+  const [revisionNote, setRevisionNote] = useState("");
+  const [revisionError, setRevisionError] = useState<string | null>(null);
 
   // Keep the draft synced with live-polled content while not actively editing,
   // so a change made elsewhere (chat, another tab) shows up without stomping local edits.
@@ -89,7 +93,7 @@ export function BusinessProfileClient({
 
   const handleReject = async () => {
     const confirmed = window.confirm(
-      "לדחות את תיק העסק? הטיוטה תימחק ותחזרו לשיחה עם אוריתה כדי להכין אחת חדשה."
+      "לדחות את תיק העסק? הטיוטה תימחק ותחזרו לאונבורדינג עם אורית כדי להכין אחת חדשה."
     );
     if (!confirmed) return;
 
@@ -107,6 +111,31 @@ export function BusinessProfileClient({
     }
   };
 
+  const handleSubmitRevision = async () => {
+    if (!revisionNote.trim()) return;
+    setRevising(true);
+    setRevisionError(null);
+    try {
+      const res = await fetch(`/api/business-profile/request-revision?brandId=${encodeURIComponent(brandId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: revisionNote }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "העדכון נכשל");
+      }
+      const updated = await res.json();
+      await mutate(updated, { revalidate: false });
+      setShowRevisionBox(false);
+      setRevisionNote("");
+    } catch (e) {
+      setRevisionError(e instanceof Error ? e.message : "העדכון נכשל");
+    } finally {
+      setRevising(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -114,10 +143,17 @@ export function BusinessProfileClient({
         <div className="flex gap-2">
           {status === "pending_approval" && (
             <>
-              <Button variant="outline" onClick={handleReject} disabled={rejecting || approving}>
+              <Button variant="outline" onClick={handleReject} disabled={rejecting || approving || revising}>
                 {rejecting ? "דוחה..." : "✕ דחייה"}
               </Button>
-              <Button onClick={handleApprove} disabled={approving || rejecting}>
+              <Button
+                variant="outline"
+                onClick={() => setShowRevisionBox((v) => !v)}
+                disabled={rejecting || approving || revising}
+              >
+                🔄 בקש שיפורים
+              </Button>
+              <Button onClick={handleApprove} disabled={approving || rejecting || revising}>
                 {approving ? "מאשר..." : "✓ אשר תיק עסק ופתח את הצוותים"}
               </Button>
             </>
@@ -143,6 +179,28 @@ export function BusinessProfileClient({
         <p className="text-sm text-muted-foreground -mt-2">
           עברו על התוכן למטה ווידאו שהוא מדויק לפני האישור — לאחר האישור צוותי השיווק והמיתוג ייפתחו לעבודה.
         </p>
+      )}
+
+      {showRevisionBox && (
+        <div className="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3.5">
+          <div className="text-sm font-medium">מה כדאי לשנות בתיק העסק?</div>
+          <Textarea
+            value={revisionNote}
+            onChange={(e) => setRevisionNote(e.target.value)}
+            placeholder="כתבו כאן בחופשיות מה חסר, מה לא מדויק, או מה צריך להשתנות — בלי הגבלת אורך..."
+            className="min-h-32"
+            disabled={revising}
+          />
+          {revisionError && <div className="text-xs text-destructive">{revisionError}</div>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowRevisionBox(false)} disabled={revising}>
+              ביטול
+            </Button>
+            <Button size="sm" onClick={handleSubmitRevision} disabled={revising || !revisionNote.trim()}>
+              {revising ? "אורית מעדכנת..." : "עדכון תיק העסק"}
+            </Button>
+          </div>
+        </div>
       )}
 
       {editing ? (

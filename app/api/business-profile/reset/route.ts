@@ -9,7 +9,7 @@ import { requireBrandMember } from "@/lib/auth/brandAccess";
  * (saved deliverables) or agent personas/skills, only the two stores that make up what the
  * agents currently know about this specific business. Marketing/branding team chats lock again
  * immediately (business_profiles.status drops to 'template'), until a fresh onboarding interview
- * with אוריתה is completed and reviewed on the business-profile page.
+ * with אורית is completed and reviewed on the business-profile page.
  */
 export async function POST(req: NextRequest) {
   const brandId = req.nextUrl.searchParams.get("brandId");

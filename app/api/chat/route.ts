@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
     if (status !== "approved") {
       const reason =
         status === "template"
-          ? "צריך קודם להשלים היכרות עם אוריתה לפני שאפשר לעבוד עם צוותי השיווק והמיתוג."
+          ? "צריך קודם להשלים היכרות עם אורית לפני שאפשר לעבוד עם צוותי השיווק והמיתוג."
           : "תיק העסק ממתין לאישור שלך בעמוד \"תיק העסק\" לפני שאפשר להתחיל לעבוד עם הצוותים.";
       return Response.json({ error: reason, gate: status }, { status: 403 });
     }

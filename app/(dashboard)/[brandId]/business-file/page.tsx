@@ -19,7 +19,7 @@ export default async function BusinessFilePage({
         <p className="text-muted-foreground mt-1">
           המסמך שממנו כל הסוכנים במערכת שואבים הקשר. אפשר לערוך ידנית, או לעדכן דרך שיחה עם{" "}
           <a href={`/${brandId}/onboarding`} className="text-primary hover:underline">
-            אוריתה
+            אורית
           </a>
           .
         </p>

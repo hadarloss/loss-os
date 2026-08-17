@@ -58,7 +58,7 @@ export default async function HomePage({ params }: { params: Promise<{ brandId: 
             <div>
               <div className="font-medium">בואו נכיר את העסק</div>
               <div className="text-sm text-muted-foreground">
-                שיחה קצרה עם אוריתה תבנה את תיק העסק שממנו כל שאר הסוכנים ניזונים.
+                שיחה קצרה עם אורית תבנה את תיק העסק שממנו כל שאר הסוכנים ניזונים.
               </div>
             </div>
             <Button nativeButton={false} render={<Link href={`/${brandId}/onboarding`}>🧭 להתחלת אונבורדינג</Link>} />
@@ -72,7 +72,7 @@ export default async function HomePage({ params }: { params: Promise<{ brandId: 
             <div>
               <div className="font-medium">תיק העסק מוכן לאישור</div>
               <div className="text-sm text-muted-foreground">
-                אוריתה סיימה את ההיכרות — יש לעבור על תיק העסק ולאשר אותו לפני שאפשר לעבוד עם הצוותים.
+                אורית סיימה את ההיכרות — יש לעבור על תיק העסק ולאשר אותו לפני שאפשר לעבוד עם הצוותים.
               </div>
             </div>
             <Button

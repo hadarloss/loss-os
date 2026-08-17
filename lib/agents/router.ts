@@ -22,7 +22,7 @@ export function buildContextBlock(businessProfile: string, memoryLog: string): s
   return [
     "\n\n---\n",
     "## תיק העסק (context/BUSINESS_PROFILE.md)\n",
-    businessProfile.trim() || "_(עדיין לא הוגדר תיק עסק — הציעו למשתמש לעבור אונבורדינג עם אוריתה)_",
+    businessProfile.trim() || "_(עדיין לא הוגדר תיק עסק — הציעו למשתמש לעבור אונבורדינג עם אורית)_",
     "\n\n## יומן זיכרון דינאמי — כללים והעדפות שנצברו (context/MEMORY_LOG.md)\n",
     memoryLog.trim() || "_(אין עדיין רשומות)_",
   ].join("\n");

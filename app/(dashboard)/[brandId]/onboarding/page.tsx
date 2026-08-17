@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { OnboardingClient } from "@/components/chat/OnboardingClient";
+import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
 import { getAgentById } from "@/lib/agents/registry";
 
 export default async function OnboardingPage({
@@ -13,16 +13,16 @@ export default async function OnboardingPage({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <div className="p-4 pb-0">
-        <h1 className="text-xl font-semibold flex items-center gap-2">
+      <div className="p-4 pb-0 text-center">
+        <h1 className="text-xl font-semibold flex items-center justify-center gap-2">
           <span aria-hidden>{agent.icon}</span>
-          {agent.name} — {agent.role}
+          בואו נכיר את העסק שלכם
         </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {agent.name} תרכיב מהתשובות שלכם את תיק העסק המלא — לצפייה ואישור בעמוד "תיק העסק" בסיום.
+        </p>
       </div>
-      <OnboardingClient
-        brandId={brandId}
-        agent={{ id: agent.id, name: agent.name, icon: agent.icon, provider: agent.provider, model: agent.model }}
-      />
+      <OnboardingWizard brandId={brandId} />
     </div>
   );
 }
