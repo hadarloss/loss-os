@@ -45,4 +45,11 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
+# /api/health is public (see proxy.ts) and only returns 200 once instrumentation.ts's DB
+# migrations have actually run — start-period gives the first boot (migrations + Next.js cold
+# start) room before failures count, so `docker compose up -d --build --wait` and Caddy only see
+# this container as healthy once it can truly serve traffic.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
 CMD ["node", "server.js"]

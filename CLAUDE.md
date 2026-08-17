@@ -20,9 +20,11 @@ npm run dev                     # מריץ על http://localhost:3000
 ## הרצה דרך Docker (פריסה לשרת)
 ```bash
 cp .env.example .env             # להזין ANTHROPIC_API_KEY (וגם OPENAI_API_KEY/OMNIROUTE אם צריך), APP_USERNAME, APP_PASSWORD אמיתיים
-docker compose up -d --build     # בונה ומריץ app + caddy (+ omniroute אם צריך)
+docker compose up -d --build --wait   # בונה ומריץ app + caddy (+ omniroute אם צריך)
 ```
 `context/`, `outputs/` ו-`data/` (בסיס הנתונים SQLite, `data/app.db`) מחוברים כ-volumes (ראו `docker-compose.yml`) כדי שהמשתמשים, המותגים, תיקי העסק, יומני הזיכרון והתוצרים שנכתבים בזמן ריצה ישרדו ריסטארט/עדכון של הקונטיינר.
+
+**פריסה: תמיד `--wait`, לעולם לא רק `-d`**: מיגרציות ה-DB (`lib/db/schema.ts`) רצות עכשיו בזמן עליית התהליך דרך `instrumentation.ts`, ולקונטיינר `app` יש `HEALTHCHECK` אמיתי מול `GET /api/health` (נתיב ציבורי, ללא session — ראו `proxy.ts`) שמחזיר 200 רק אחרי שהמיגרציות סיימו והשרת מוכן לשרת תעבורה. `docker compose up -d --build --wait` לא חוזר "הצלחה" עד שהבדיקה עברה בפועל — כך שאין עוד חלון שבו הפקודה מדווחת שהפריסה הצליחה בזמן שהקונטיינר עדיין "מתחמם" (זה המקור לשגיאות `no such table` שנצפו בעבר). `caddy` גם תלוי כעת ב-`condition: service_healthy` של `app`, כך שהוא לא מנתב תעבורה לקונטיינר לא-מוכן.
 
 **זיכרון מרובה-מותגים, מגובה SQLite**: המערכת רב-משתמשית ורב-מותגית — כל משתמש יכול להיות חבר במספר "מותגים" (עסקים), וכל הנתונים החיים (משתמשים, מותגים, חברות במותג, תיק עסק, יומן זיכרון, אינדקס תוצרים) יושבים ב-`data/app.db` (SQLite, ראו `lib/db/schema.ts`), לא בקבצי markdown שטוחים. תיק העסק ויומן הזיכרון נשמרים כעת per-brand בטבלאות `business_profiles`/`memory_log_entries` — `lib/fs/businessProfile.ts` ו-`lib/fs/memoryLog.ts` מקבלים `brandId` ומבודדים לחלוטין בין מותגים. `context/BUSINESS_PROFILE.template.md` נשאר בשימוש רק לזריעת תיק עסק ריק למותג חדש (ה-DB-equivalent של `ensureSeededFromTemplate` הישן). קובצי ה-`.md`/`.meta.json` בפועל של תוצרים עדיין נשמרים תחת `outputs/`, אך מאונדקסים לפי `brandId` בטבלת `outputs`. `data/` (כמו `context/`/`outputs/` בעבר) אינו במעקב git — ראו `.gitignore` — ומחובר כ-volume כדי לשרוד `git pull` + `docker compose up -d --build`.
 

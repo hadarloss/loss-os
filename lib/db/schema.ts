@@ -149,6 +149,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_plans_job ON plans(job_id);
 `);
 
+// Tracks which one-off migrations (the kind that can't be expressed as a plain, always-safe
+// `CREATE TABLE IF NOT EXISTS` / `ensureColumn`) have already run — an explicit, indexed record
+// instead of re-deriving "did this already happen?" by parsing another table's DDL text on every
+// startup. That text-matching approach is what let ensureAgentJobsStatusCheck's rebuild silently
+// re-attempt itself under the right conditions; a version table can't misread its own history.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+function migrationApplied(version: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM schema_migrations WHERE version = ?`).get(version);
+}
+
+function markMigrationApplied(version: string): void {
+  db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
+}
+
 // `CREATE TABLE IF NOT EXISTS` doesn't add columns to a table that already exists from before
 // this migration — the `outputs` table shipped without status/version/title originally, so add
 // them defensively for any pre-existing database file.
@@ -189,21 +209,35 @@ function tableExists(name: string): boolean {
 // The rebuild is multiple DDL statements; a process killed mid-way (e.g. a container redeploy
 // stopping the old process while this runs) can strand the database with `agent_jobs` renamed to
 // `agent_jobs_old` but never recreated — every later query against `agent_jobs` then fails with
-// "no such table". Two defenses against that: run the rebuild inside an explicit transaction so a
-// kill mid-way rolls back to the pre-migration state instead of leaving it half-applied, and
-// self-heal on startup if a previous run was still interrupted before this fix existed.
+// "no such table". Defenses against that: the rebuild runs inside an explicit transaction so a
+// kill mid-way rolls back to the pre-migration state instead of leaving it half-applied; the
+// migrations table below (not this table's own DDL text) is the source of truth for whether the
+// rebuild already happened, so there's no scenario where this re-parses old SQL and decides to
+// re-attempt a rebuild that already succeeded; and this whole module now runs once at process
+// startup via instrumentation.ts (before the server accepts any requests) rather than lazily on
+// whichever request happens to import it first — see instrumentation.ts for why that mattered.
+const AGENT_JOBS_STATUS_MIGRATION = "agent_jobs_plan_pending_approval_status";
+
 function ensureAgentJobsStatusCheck(): void {
-  // Self-heal a stranded rename from a previous crashed run: `agent_jobs_old` exists (the rename
-  // succeeded) but `agent_jobs` doesn't (the recreate step never ran) — restore the original name
-  // so the normal check below can retry the rebuild cleanly.
+  // Self-heal a stranded rename from a previous crashed run (predates the migrations-table gate
+  // below): `agent_jobs_old` exists (the rename succeeded) but `agent_jobs` doesn't (the recreate
+  // step never ran) — restore the original name so the check below can retry the rebuild cleanly.
   if (tableExists("agent_jobs_old") && !tableExists("agent_jobs")) {
     db.exec(`ALTER TABLE agent_jobs_old RENAME TO agent_jobs;`);
   }
 
+  if (migrationApplied(AGENT_JOBS_STATUS_MIGRATION)) return;
+
   const row = db
     .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_jobs'`)
     .get() as { sql: string } | undefined;
-  if (!row || row.sql.includes("plan_pending_approval")) return;
+  // No table yet, or it already has the right constraint (e.g. a brand-new database, created
+  // fresh by the CREATE TABLE IF NOT EXISTS above which already includes 'plan_pending_approval')
+  // — nothing to rebuild, just record the migration as done so this check stays a no-op forever.
+  if (!row || row.sql.includes("plan_pending_approval")) {
+    markMigrationApplied(AGENT_JOBS_STATUS_MIGRATION);
+    return;
+  }
 
   db.exec(`
     BEGIN IMMEDIATE;
@@ -230,6 +264,7 @@ function ensureAgentJobsStatusCheck(): void {
 
     COMMIT;
   `);
+  markMigrationApplied(AGENT_JOBS_STATUS_MIGRATION);
 }
 ensureAgentJobsStatusCheck();
 

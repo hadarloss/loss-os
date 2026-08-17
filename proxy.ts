@@ -5,7 +5,7 @@ import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 // Native HTTP Basic Auth prompts are unreliable across mobile browsers/in-app
 // webviews (some never show a credential UI at all), so auth is a real login
 // page + signed session cookie instead — works identically everywhere.
-const PUBLIC_PATHS = ["/login", "/signup", "/api/auth/login", "/api/auth/signup"];
+const PUBLIC_PATHS = ["/login", "/signup", "/api/auth/login", "/api/auth/signup", "/api/health"];
 
 export function proxy(request: NextRequest) {
   if (!process.env.SESSION_SECRET) {
