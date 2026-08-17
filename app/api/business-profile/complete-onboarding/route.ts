@@ -6,9 +6,13 @@ import { readBusinessProfile, writeBusinessProfile, readBusinessProfileFull } fr
 import { readMemoryLog } from "@/lib/fs/memoryLog";
 import { requireBrandMember } from "@/lib/auth/brandAccess";
 import { ONBOARDING_QUESTIONS } from "@/lib/agents/onboardingQuestions";
+import { fetchWebsiteText } from "@/lib/fs/websiteFetch";
 
 const AnswerSchema = z.object({ id: z.string(), question: z.string(), answer: z.string() });
-const BodySchema = z.object({ answers: z.array(AnswerSchema) });
+const BodySchema = z.object({
+  answers: z.array(AnswerSchema),
+  websiteUrl: z.string().trim().min(1).optional(),
+});
 
 /**
  * The one and only point אורית (the onboarding agent) actually runs — the wizard UI collects
@@ -51,6 +55,14 @@ export async function POST(req: NextRequest) {
     (q, i) => `${i + 1}. ${q.question}\nתשובה: ${answersById.get(q.id)}`
   ).join("\n\n");
 
+  // Best-effort only — a site that's down, blocks bots, or times out never blocks onboarding
+  // completion; fetchWebsiteText already fails closed to null for that (and for anything that
+  // isn't a safe public http/https target).
+  const websiteText = parsed.data.websiteUrl ? await fetchWebsiteText(parsed.data.websiteUrl) : null;
+  const websiteBlock = websiteText
+    ? `\n\nתוכן שנשלף מאתר האינטרנט של העסק (${parsed.data.websiteUrl}) — לשלב כמקור מידע משלים לתשובות, לא להעתיק כמו שהוא:\n${websiteText}`
+    : "";
+
   const history: ConversationMessage[] = [
     {
       role: "user",
@@ -59,7 +71,8 @@ export async function POST(req: NextRequest) {
         "אין צורך לחזור על התשובות או לנסח אותן מחדש כאילו זו שיחה — תפקידך היחיד כרגע הוא " +
         "לייצר את מסמך `BUSINESS_PROFILE.md` המלא לפי המבנה הקבוע (ראו קובץ הבסיס), " +
         "ישירות מהתשובות האלה, בלי טקסט נוסף לפני/אחרי המסמך עצמו:\n\n" +
-        qaText,
+        qaText +
+        websiteBlock,
     },
   ];
 

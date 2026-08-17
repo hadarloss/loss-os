@@ -120,9 +120,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           plan: { id, task: firstTask },
         });
       } catch (error) {
-        controller.enqueue(
-          sseLine({ type: "error", message: error instanceof Error ? error.message : String(error) })
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[POST /api/plans/${id}/approve] brand=${brandId} agent=${agent.id}: ${message}`);
+        controller.enqueue(sseLine({ type: "error", message }));
         controller.close();
       }
     },

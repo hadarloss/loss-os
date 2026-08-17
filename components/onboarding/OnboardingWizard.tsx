@@ -12,20 +12,29 @@ import { ONBOARDING_QUESTIONS } from "@/lib/agents/onboardingQuestions";
  * אורית only runs once, at the very end, to turn all 12 answers into the full business-file
  * document (POST /api/business-profile/complete-onboarding).
  */
+// A dedicated step (id "website") before the fixed 12 questions — optional, purely additive
+// context. Kept out of ONBOARDING_QUESTIONS/lib/agents/onboardingQuestions.ts because it's not one
+// of the 12 answers the completion endpoint validates as required; it's a separate optional field.
+const WEBSITE_STEP_ID = "website";
+
 export function OnboardingWizard({ brandId }: { brandId: string }) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [websiteUrl, setWebsiteUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const total = ONBOARDING_QUESTIONS.length;
-  const current = ONBOARDING_QUESTIONS[step];
-  const isLast = step === total - 1;
-  const currentAnswer = answers[current.id] ?? "";
-  const canAdvance = currentAnswer.trim().length > 0;
+  const totalSteps = ONBOARDING_QUESTIONS.length + 1; // +1 for the website step
+  const isWebsiteStep = step === 0;
+  const current = isWebsiteStep ? null : ONBOARDING_QUESTIONS[step - 1];
+  const isLast = step === totalSteps - 1;
+  const currentAnswer = current ? answers[current.id] ?? "" : "";
+  // The website step is always optional — never blocks advancing.
+  const canAdvance = isWebsiteStep || currentAnswer.trim().length > 0;
 
   const handleAnswerChange = (value: string) => {
+    if (!current) return;
     setAnswers((prev) => ({ ...prev, [current.id]: value }));
   };
 
@@ -57,6 +66,7 @@ export function OnboardingWizard({ brandId }: { brandId: string }) {
               question: q.question,
               answer: answers[q.id] ?? "",
             })),
+            websiteUrl: websiteUrl.trim() || undefined,
           }),
         }
       );
@@ -72,7 +82,7 @@ export function OnboardingWizard({ brandId }: { brandId: string }) {
     }
   };
 
-  const progressPct = Math.round(((step + 1) / total) * 100);
+  const progressPct = Math.round(((step + 1) / totalSteps) * 100);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col items-center p-6">
@@ -80,7 +90,7 @@ export function OnboardingWizard({ brandId }: { brandId: string }) {
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              שאלה {step + 1} מתוך {total}
+              שאלה {step + 1} מתוך {totalSteps}
             </span>
             <span>{progressPct}%</span>
           </div>
@@ -92,18 +102,39 @@ export function OnboardingWizard({ brandId }: { brandId: string }) {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold leading-snug">{current.question}</h2>
-          <Textarea
-            key={current.id}
-            autoFocus
-            value={currentAnswer}
-            onChange={(e) => handleAnswerChange(e.target.value)}
-            placeholder={current.placeholder}
-            className="min-h-32"
-            disabled={submitting}
-          />
-        </div>
+        {isWebsiteStep ? (
+          <div className="flex flex-col gap-3">
+            <h2 className="text-xl font-semibold leading-snug">יש לכם אתר אינטרנט קיים?</h2>
+            <p className="text-sm text-muted-foreground">
+              אופציונלי — אם תדביקו קישור, אורית תלמד ממנו על העסק בנוסף לתשובות שלכם. אפשר גם לדלג.
+            </p>
+            <input
+              key={WEBSITE_STEP_ID}
+              autoFocus
+              type="url"
+              inputMode="url"
+              value={websiteUrl}
+              onChange={(e) => setWebsiteUrl(e.target.value)}
+              placeholder="https://example.com"
+              dir="ltr"
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm text-end shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              disabled={submitting}
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <h2 className="text-xl font-semibold leading-snug">{current!.question}</h2>
+            <Textarea
+              key={current!.id}
+              autoFocus
+              value={currentAnswer}
+              onChange={(e) => handleAnswerChange(e.target.value)}
+              placeholder={current!.placeholder}
+              className="min-h-32"
+              disabled={submitting}
+            />
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -116,7 +147,13 @@ export function OnboardingWizard({ brandId }: { brandId: string }) {
             → הקודם
           </Button>
           <Button onClick={handleNext} disabled={!canAdvance || submitting}>
-            {submitting ? "מכינה את תיק העסק..." : isLast ? "סיום ✓" : "הבא ←"}
+            {submitting
+              ? "מכינה את תיק העסק..."
+              : isLast
+                ? "סיום ✓"
+                : isWebsiteStep && !websiteUrl.trim()
+                  ? "דלג ←"
+                  : "הבא ←"}
           </Button>
         </div>
       </div>

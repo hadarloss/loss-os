@@ -53,6 +53,16 @@ function buildTeamRosterBlock(agent: AgentDef, teamRoster: AgentDef[]): string {
   return `\n\n## הצוות שלך\nחברי/ות הצוות שאת/ה עובד/ת איתם, ומה כל אחד/ת מהם עושה — לידיעה כשמשהו חורג מהתחום שלך ושווה לציין שכדאי להעביר הלאה:\n${lines.join("\n")}`;
 }
 
+// Appended to every agent's system prompt from this single choke point (not per skills/*.md file)
+// so the rule can never be missed by an individual persona and never depends on the model
+// "remembering" it from a specific phrasing — same reasoning as why the per-agent professional
+// skills content lives in code-adjacent, always-loaded files rather than a triggerable mechanism.
+const GLOBAL_RULES_BLOCK =
+  "\n\n## כללים גלובליים מחייבים (חלים על כל תשובה, בלי יוצא מן הכלל)\n" +
+  "- לעולם אין לחזור, לצטט או לסכם את מה שהמשתמש/ת כתב/ה — הוא/היא כבר יודע/ת מה כתב/ה. " +
+  "התחילו ישר בתוכן התשובה או בשאלת ההבהרה עצמה, בלי \"הבנתי שאתם...\"/\"אז אם אני מסכם...\" או כל ניסוח דומה.\n" +
+  "- אם דרושה שאלת הבהרה — שאלו רק אותה, ישירות, בלי לחזור על שאר הבקשה קודם.";
+
 export function buildAgentSystemPrompt(
   agent: AgentDef,
   businessProfile: string,
@@ -64,7 +74,13 @@ export function buildAgentSystemPrompt(
     ? `\n\n## דגשים מחייבים מהניתוב (מהמנהל/ת שהפנה/תה אליך)\n${routingBrief.trim()}`
     : "";
   const rosterBlock = teamRoster?.length ? buildTeamRosterBlock(agent, teamRoster) : "";
-  return agent.systemPrompt + buildContextBlock(businessProfile, memoryLog) + rosterBlock + briefBlock;
+  return (
+    agent.systemPrompt +
+    buildContextBlock(businessProfile, memoryLog) +
+    rosterBlock +
+    briefBlock +
+    GLOBAL_RULES_BLOCK
+  );
 }
 
 /**
@@ -928,6 +944,38 @@ function looksLikeAClarifyingQuestion(text: string): boolean {
   return /[?？]\s*$/.test(trimmed);
 }
 
+/** Distinguishes "model didn't call the forced tool" from a thrown network/API error in the logs
+ *  below — both used to fall back to needs_user_input completely silently, which made a real
+ *  finished deliverable (e.g. a Gantt) indistinguishable from ordinary chat with zero trace. */
+class ClassifierNoToolCallError extends Error {
+  constructor() {
+    super("classifier response had no function_call output");
+  }
+}
+
+/** One retry (not a loop) before giving up — guards against a transient network/rate-limit
+ *  blip silently discarding a finished deliverable. Every failed attempt is logged with enough
+ *  context (label includes agent/task) to actually diagnose it from `docker compose logs`,
+ *  unlike the previous bare catch-and-swallow. */
+async function withSingleRetry<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const reason =
+        error instanceof ClassifierNoToolCallError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      console.error(`[${label}] attempt ${attempt}/${MAX_ATTEMPTS} failed: ${reason}`);
+      if (attempt === MAX_ATTEMPTS) return null;
+    }
+  }
+  return null;
+}
+
 export async function classifyNextStep(
   agent: AgentDef,
   replyText: string,
@@ -942,10 +990,9 @@ export async function classifyNextStep(
   const others = specialists.filter((s) => s.id !== agent.id);
   const specialistIds = others.map((s) => s.id);
 
-  try {
-    const client = getOpenAIClient();
-
-    if (activeTask) {
+  if (activeTask) {
+    const result = await withSingleRetry(`classifyNextStep (task) agent=${agent.id} task=${activeTask.id}`, async () => {
+      const client = getOpenAIClient();
       const response = await client.responses.create({
         model: NEXT_STEP_CLASSIFIER_MODEL,
         instructions: buildTaskCompletionSystemPrompt(activeTask),
@@ -971,16 +1018,20 @@ export async function classifyNextStep(
       const call = response.output.find(
         (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
       );
-      if (!call) return { type: "needs_user_input" };
+      if (!call) throw new ClassifierNoToolCallError();
+      return JSON.parse(call.arguments) as TaskCompletionToolInput;
+    });
 
-      const input = JSON.parse(call.arguments) as TaskCompletionToolInput;
-      if (input.decision === "task_complete") return { type: "task_complete" };
-      if (input.decision === "task_needs_revision") {
-        return { type: "task_needs_revision", note: input.note?.trim() ?? "" };
-      }
-      return { type: "needs_user_input" };
+    if (!result) return { type: "needs_user_input" };
+    if (result.decision === "task_complete") return { type: "task_complete" };
+    if (result.decision === "task_needs_revision") {
+      return { type: "task_needs_revision", note: result.note?.trim() ?? "" };
     }
+    return { type: "needs_user_input" };
+  }
 
+  const result = await withSingleRetry(`classifyNextStep agent=${agent.id}`, async () => {
+    const client = getOpenAIClient();
     const response = await client.responses.create({
       model: NEXT_STEP_CLASSIFIER_MODEL,
       instructions:
@@ -1009,22 +1060,20 @@ export async function classifyNextStep(
     const call = response.output.find(
       (item): item is OpenAI.Responses.ResponseFunctionToolCall => item.type === "function_call"
     );
-    if (!call) return { type: "needs_user_input" };
+    if (!call) throw new ClassifierNoToolCallError();
+    return JSON.parse(call.arguments) as NextStepToolInput;
+  });
 
-    const input = JSON.parse(call.arguments) as NextStepToolInput;
-
-    if (input.decision === "handoff_needed" && input.agent_id && specialistIds.includes(input.agent_id)) {
-      return { type: "handoff_needed", agentId: input.agent_id, brief: input.brief?.trim() ?? "" };
-    }
-    if (input.decision === "deliverable_complete") {
-      return {
-        type: "deliverable_complete",
-        deliverableType: input.deliverable_type?.trim() || "general",
-        title: input.title?.trim().slice(0, 80) || "",
-      };
-    }
-    return { type: "needs_user_input" };
-  } catch {
-    return { type: "needs_user_input" };
+  if (!result) return { type: "needs_user_input" };
+  if (result.decision === "handoff_needed" && result.agent_id && specialistIds.includes(result.agent_id)) {
+    return { type: "handoff_needed", agentId: result.agent_id, brief: result.brief?.trim() ?? "" };
   }
+  if (result.decision === "deliverable_complete") {
+    return {
+      type: "deliverable_complete",
+      deliverableType: result.deliverable_type?.trim() || "general",
+      title: result.title?.trim().slice(0, 80) || "",
+    };
+  }
+  return { type: "needs_user_input" };
 }

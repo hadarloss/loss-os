@@ -197,8 +197,10 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Hoisted above the try so the catch below can still log which agent was active —
+      // `let` inside the try block wouldn't be visible in its own catch.
+      let agent: AgentDef | null = directAgent;
       try {
-        let agent = directAgent;
         let routingBrief: string | undefined;
         let resumedJobId: string | undefined;
         let resumedPlanTask: { id: string; task: PlanTask } | undefined;
@@ -360,9 +362,9 @@ export async function POST(req: NextRequest) {
           plan: resumedPlanTask,
         });
       } catch (error) {
-        controller.enqueue(
-          sseLine({ type: "error", message: error instanceof Error ? error.message : String(error) })
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[POST /api/chat] brand=${brandId} agent=${agent?.id ?? "unknown"}: ${message}`);
+        controller.enqueue(sseLine({ type: "error", message }));
         controller.close();
       }
     },

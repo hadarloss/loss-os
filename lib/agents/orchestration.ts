@@ -61,7 +61,11 @@ async function persistDeliverable(params: PersistDeliverableParams): Promise<Per
     });
     return { ok: true, id: saved.id, format: saved.format };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[persistDeliverable] save failed brand=${params.brandId} agent=${params.agentId} type=${params.deliverableType}: ${message}`
+    );
+    return { ok: false, error: message };
   }
 }
 
@@ -152,6 +156,9 @@ export async function runOrchestrationLoop(params: OrchestrationParams): Promise
     });
 
     if (streamError) {
+      console.error(
+        `[runOrchestrationLoop] stream failed brand=${brandId} agent=${agent.id} job=${jobId}: ${(streamError as Error).message}`
+      );
       updateAgentJob(jobId, { status: "error", label: (streamError as Error).message.slice(0, 200) });
       controller.enqueue(sseLine({ type: "error", message: (streamError as Error).message }));
       controller.close();
