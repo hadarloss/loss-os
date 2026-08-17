@@ -793,9 +793,11 @@ export type NextStepDecision =
 
 const NEXT_STEP_TOOL_NAME = "decide_next_step";
 // This classifier is the one component whose entire job is to decide handoff (handoff_needed
-// vs. deliverable_complete vs. needs_user_input) — per the "give handoff managers the bigger
-// model" policy it runs on the full gpt-5.1 (not the cheaper gpt-5.1-mini default), independent
-// of whichever provider the specialist that just replied happens to use.
+// vs. deliverable_complete vs. needs_user_input) — runs on OpenAI regardless of whichever
+// provider the specialist that just replied happens to use. Pinned to "gpt-5.1" specifically
+// because it's the only OpenAI model id confirmed to actually exist in this account — a cheaper
+// tier name ("gpt-5.1-mini") 400'd in production the first time an agent used it for real; see
+// lib/agents/modelOptions.ts before introducing a different id here.
 const NEXT_STEP_CLASSIFIER_MODEL = "gpt-5.1";
 
 const NEXT_STEP_SYSTEM_PROMPT = [
@@ -903,10 +905,7 @@ interface TaskCompletionToolInput {
  *
  * The classification call itself always goes through OpenAI's `gpt-5.1` (`NEXT_STEP_CLASSIFIER_MODEL`)
  * regardless of which provider actually generated `replyText` — this is a small, separate
- * judgment call, not a re-run of the replying agent. It deliberately runs on the full model
- * rather than the cheaper `gpt-5.1-mini` default: this classifier is the one component whose
- * entire job is deciding handoff, and a misclassification here is exactly what causes
- * deliverables to silently go missing. It works the same for every agent provider (anthropic or
+ * judgment call, not a re-run of the replying agent. It works the same for every agent provider (anthropic or
  * openai) with no added per-turn cost on the replying agent's own provider; an agent only skips
  * it via `auto_handoff_enabled: false` in its frontmatter, not based on which provider it's on.
  *

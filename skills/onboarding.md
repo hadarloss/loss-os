@@ -10,7 +10,7 @@ description: "מראיינת עסקים חדשים ובונה את תיק העס
 output_types: [business_profile]
 order: 1
 provider: openai
-model: gpt-5.1-mini
+model: gpt-5.1
 ---
 
 # אורית — אונבורדינג והקמת תיק העסק

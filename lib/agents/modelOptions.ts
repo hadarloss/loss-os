@@ -9,15 +9,17 @@ export interface ModelOption {
   label: string;
 }
 
+// Only confirmed-working model ids belong here — this list has already burned twice on a
+// plausible-sounding but nonexistent tier name reaching production ("GPT-5.6 Terra", then
+// "gpt-5.1-mini": both 400'd with "model does not exist" the first time an agent actually used
+// them). Every id below is one already exercised successfully in production by a real agent.
+// Verify a new id actually exists in the relevant provider account before adding it back.
 export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
   { value: "claude-haiku-4-5-20251001", label: "Claude Haiku — מהיר וזול" },
-  { value: "claude-sonnet-5", label: "Claude Sonnet — מאוזן" },
-  { value: "claude-opus-5", label: "Claude Opus — חזק ויקר" },
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
-  { value: "gpt-5.1-mini", label: "GPT-5.1 mini — מהיר וזול" },
-  { value: "gpt-5.1", label: "GPT-5.1 — מלא" },
+  { value: "gpt-5.1", label: "GPT-5.1" },
 ];
 
 /** Accepts a loose string (some call sites only have an `AgentLite`-typed provider, not the

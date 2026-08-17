@@ -68,12 +68,12 @@ provider: anthropic     # anthropic (ברירת מחדל) | openai | omniroute �
 model: claude-haiku-4-5-20251001   # מזהה המודל אצל אותו provider; ניתן לדריסה לכל סוכן
 ```
 
-**בחירת מודל לפי תפקיד**: 36 הסוכנים המומחים (ספציאליסטים + ערן/QA) על `provider: anthropic, model: claude-haiku-4-5-20251001` — המודל הזול ביותר בקטלוג Claude, ברירת המחדל ההיסטורית של המערכת לכתיבה. שני מנהלי הצוות (גיא, ריי) והמסווג הפנימי `classifyNextStep` (`lib/agents/router.ts`) — שלושת הרכיבים היחידים במערכת שמחליטים בפועל handoff (למי לנתב / האם להעביר לסוכן הבא) — על `provider: openai, model: gpt-5.1`: המודל המלא, במכוון לא הזול ביותר (`gpt-5.1-mini`), כי טעויות סיווג handoff הן בדיוק מה שגורם לתוצרים "ללכת לאיבוד" (ראו גם "תוצרים" למטה). אורית (`onboarding`) על `provider: openai, model: gpt-5.1-mini` — היא לא מחליטה handoff, אז יורדת לשכבה הזולה ביותר של OpenAI (זולה בפועל יותר מ-Claude Haiku). כל סוכן OpenAI עתידי שלא אחראי על handoff אמור לרדת ל-`gpt-5.1-mini` (הזול, `DEFAULT_OPENAI_MODEL`) — לא ל-`gpt-5.1` המלא.
+**בחירת מודל לפי תפקיד**: 36 הסוכנים המומחים (ספציאליסטים + ערן/QA) על `provider: anthropic, model: claude-haiku-4-5-20251001` — המודל הזול ביותר בקטלוג Claude, ברירת המחדל ההיסטורית של המערכת לכתיבה. שני מנהלי הצוות (גיא, ריי), המסווג הפנימי `classifyNextStep` (`lib/agents/router.ts`), **וגם אורית** (`onboarding`) — כולם על `provider: openai, model: gpt-5.1`. בפועל זהו כרגע מזהה המודל היחיד שאומת כעובד בחשבון ה-OpenAI (`GPT-5.6 Terra` ו-`gpt-5.1-mini` שניהם החזירו `400 model does not exist` בפרודקשן בעבר) — אין עדיין הבחנת "זול מול חזק" בפועל בצד OpenAI כמו אצל Claude, עד שיאומת מזהה נוסף אמיתי. אל תוסיפו `model` חדש לסוכן OpenAI בלי לוודא קודם שהוא קיים בפועל בחשבון (ראו `lib/agents/modelOptions.ts`).
 
 ## שני ספקי מודל (Anthropic + OpenAI)
 כל סוכן בוחר ספק דרך שדה `provider` בפרונטמאטר (`anthropic` בברירת מחדל או `openai`). `lib/agents/router.ts` מנתב כל קריאה — גם ניתוב ההיררכיה (`routeToAgent`) וגם תשובת המומחה בסטרימינג (`streamAgentReply`) — לפי `provider` של הסוכן הרלוונטי:
 - `provider: anthropic` (ברירת מחדל, וכיום 36 הסוכנים המומחים) → `lib/anthropic/client.ts`, Messages API, `model` הוא מזהה Claude (`claude-haiku-4-5-20251001` הזול ביותר).
-- `provider: openai` (שני מנהלי הצוות, המסווג הפנימי, ואורית) → `lib/openai/client.ts`, Responses API (`client.responses.create`), `model` הוא `gpt-5.1-mini` (זול, ברירת מחדל — גם לאורית) או `gpt-5.1` המלא (לרכיבי handoff בלבד).
+- `provider: openai` (שני מנהלי הצוות, המסווג הפנימי, ואורית) → `lib/openai/client.ts`, Responses API (`client.responses.create`), `model` הוא `gpt-5.1` — כרגע גם ברירת המחדל (`DEFAULT_OPENAI_MODEL`) וגם המזהה היחיד שאומת כעובד בחשבון.
 
 **כדי "לפרוס מחדש" סוכן על ספק אחר**: לשנות בקובץ ה-`skills/*.md` שלו את `provider` ואת `model` יחד למזהה המתאים לספק החדש — אין ברירת מחדל בין ספקים למודל. אין צורך בשינוי קוד נוסף.
 

@@ -23,5 +23,5 @@ export function getOpenAIClient(): OpenAI {
   return client;
 }
 
-export const DEFAULT_OPENAI_MODEL = "gpt-5.1-mini";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.1";
 export const OPENAI_MAX_TOKENS = 4096;
