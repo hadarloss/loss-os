@@ -42,6 +42,37 @@ function asText(value: unknown): string {
   return "";
 }
 
+/**
+ * Matches a model-supplied agent id against the real roster, tolerating the kind of noise models
+ * routinely glue onto an otherwise-correct id: a stray list marker ("h. ", "1) ", "- "), leading/
+ * trailing whitespace or quotes, or a wrapping phrase. Exact match first, then a handful of cheap
+ * normalizations, then substring containment as a last resort — never inventing an id that isn't
+ * actually in `specialistIds`. Returns null (not a fallback) when nothing plausible matches, so
+ * callers can still reject a genuinely hallucinated id.
+ *
+ * This exists because `agent_id === "h hadar_story_narrative"` (a real agent id with one
+ * character glued to the front) previously failed with "the assigned agent doesn't exist" even
+ * though the agent obviously does — the exact-match check had zero tolerance for noise a model can
+ * introduce, the same brittle-matching failure mode as the earlier 1-based dependency-index bug.
+ */
+function resolveAgentId(rawId: string, specialistIds: string[]): string | null {
+  if (specialistIds.includes(rawId)) return rawId;
+
+  const trimmed = rawId.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (specialistIds.includes(trimmed)) return trimmed;
+
+  const stripped = trimmed.replace(/^[-•*]?\s*[a-zA-Z0-9]{0,2}[.)]?\s+/, "").trim();
+  if (specialistIds.includes(stripped)) return stripped;
+
+  const bySuffix = specialistIds.find((id) => trimmed.endsWith(id) || stripped.endsWith(id));
+  if (bySuffix) return bySuffix;
+
+  const byContains = specialistIds.find((id) => trimmed.includes(id));
+  if (byContains) return byContains;
+
+  return null;
+}
+
 function buildRosterText(specialists: AgentDef[]): string {
   return specialists
     .map((s) => `- ${s.id} — ${s.icon} ${s.name} (${s.role}): ${s.description}`)
@@ -177,11 +208,15 @@ function toRoutingDecision(input: RouteToolInput, specialistIds: string[]): Rout
     // a clear, retryable message instead of "לא קיים: undefined".
     throw new Error("המנהל לא הצליח לבחור סוכן מתאים לבקשה. נסו לשלוח את ההודעה שוב.");
   }
-  if (!specialistIds.includes(input.agent_id)) {
+  const resolved = resolveAgentId(input.agent_id, specialistIds);
+  if (!resolved) {
     throw new Error(`המנהל ניתב לסוכן לא קיים: ${input.agent_id}`);
   }
+  if (resolved !== input.agent_id) {
+    console.error(`[routeToAgent] normalized noisy agent_id "${input.agent_id}" -> "${resolved}"`);
+  }
   return {
-    agentId: input.agent_id,
+    agentId: resolved,
     reason: input.reason,
     deliverableType: input.deliverable_type ?? "general",
     brief: input.brief,
@@ -514,15 +549,20 @@ function toProposedPlan(input: ProposePlanToolInput, specialistIds: string[]): P
     throw new Error("המנהל לא החזיר תוכנית תקינה.");
   }
   const rawTasks = input.tasks.slice(0, MAX_PLAN_TASKS);
-  for (const t of rawTasks) {
-    if (!t.agent_id || !specialistIds.includes(t.agent_id)) {
+  const resolvedAgentIds = rawTasks.map((t) => {
+    const resolved = t.agent_id ? resolveAgentId(t.agent_id, specialistIds) : null;
+    if (!resolved) {
       throw new Error(`המנהל שיבץ משימה לסוכן לא קיים: ${t.agent_id}`);
     }
-  }
+    if (resolved !== t.agent_id) {
+      console.error(`[proposePlan] normalized noisy agent_id "${t.agent_id}" -> "${resolved}"`);
+    }
+    return resolved;
+  });
   return {
     goal: asText(input.goal) || "עבודה חדשה",
     tasks: rawTasks.map((t, selfIndex) => ({
-      agentId: t.agent_id,
+      agentId: resolvedAgentIds[selfIndex],
       deliverableType: asText(t.deliverable_type) || "general",
       title: asText(t.title).slice(0, 80) || "משימה",
       brief: asText(t.brief),
@@ -1115,8 +1155,14 @@ export async function classifyNextStep(
   });
 
   if (!result) return { type: "needs_user_input" };
-  if (result.decision === "handoff_needed" && result.agent_id && specialistIds.includes(result.agent_id)) {
-    return { type: "handoff_needed", agentId: result.agent_id, brief: asText(result.brief) };
+  if (result.decision === "handoff_needed" && result.agent_id) {
+    const resolved = resolveAgentId(result.agent_id, specialistIds);
+    if (resolved) {
+      if (resolved !== result.agent_id) {
+        console.error(`[classifyNextStep] normalized noisy agent_id "${result.agent_id}" -> "${resolved}"`);
+      }
+      return { type: "handoff_needed", agentId: resolved, brief: asText(result.brief) };
+    }
   }
   if (result.decision === "deliverable_complete") {
     return {
