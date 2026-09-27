@@ -34,26 +34,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Optional — only starts/matters if an agent's skills/*.md sets `provider: omniroute`.
-  # Self-hosted, MIT-licensed, free multi-provider LLM gateway (OpenAI-compatible Chat
-  # Completions API in front of 300+ providers, with model-priority routing configured
-  # in its own dashboard).
-  # Once it's up, set OMNIROUTE_BASE_URL=http://omniroute:20128/v1 in .env.
-  # NOT published to the host — its dashboard holds live provider API keys and a fresh
-  # instance has zero auth until first-time setup completes, so it must never be
-  # directly reachable from the internet. Reach the dashboard via an SSH tunnel:
-  #   ssh -L 20128:localhost:20128 <user>@<host>   then browse http://localhost:20128
-  omniroute:
-    image: diegosouzapw/omniroute:latest
-    env_file:
-      - .env
-    expose:
-      - "20128"
-    volumes:
-      - omniroute-data:/app/data
-    restart: unless-stopped
-
 volumes:
   caddy_data:
   caddy_config:
-  omniroute-data:
